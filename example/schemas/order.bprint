@@ -1,0 +1,44 @@
+{
+  "chaim_version": 1,
+  "model_name": "Order",
+  "fields": [
+    {
+      "name": "order_id",
+      "type": "string",
+      "required": true,
+      "partition_key": true
+    },
+    {
+      "name": "user_id",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "required": true,
+      "sort_key": true
+    },
+    {
+      "name": "total_amount",
+      "type": "number",
+      "required": true
+    },
+    {
+      "name": "items",
+      "type": "array",
+      "required": true,
+      "item_type": "object"
+    },
+    {
+      "name": "created_at",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "updated_at",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "chaim_version": 1,
+  "model_name": "User",
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "required": true,
+      "partition_key": true
+    },
+    {
+      "name": "email",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "created_at",
+      "type": "string",
+      "required": true,
+      "sort_key": true
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "required": false
+    },
+    {
+      "name": "tags",
+      "type": "array",
+      "required": false,
+      "item_type": "string"
+    }
+  ]
+}
