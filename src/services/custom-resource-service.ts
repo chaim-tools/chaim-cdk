@@ -15,10 +15,12 @@ export class CustomResourceService {
     handler: lambda.Function,
     enhancedDataStore: string
   ): cr.AwsCustomResource {
+    const isSaaSMode = this.isSaaSMode(props);
+    
     return new cr.AwsCustomResource(scope, 'ChaimBinderResource', {
-      onCreate: this.createAction('Create', handler, props, enhancedDataStore),
-      onUpdate: this.createAction('Update', handler, props, enhancedDataStore),
-      onDelete: this.createAction('Delete', handler, props, enhancedDataStore),
+      onCreate: this.createAction('Create', handler, props, enhancedDataStore, isSaaSMode),
+      onUpdate: this.createAction('Update', handler, props, enhancedDataStore, isSaaSMode),
+      onDelete: this.createAction('Delete', handler, props, enhancedDataStore, isSaaSMode),
       policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
         resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
       }),
@@ -41,28 +43,44 @@ export class CustomResourceService {
     );
   }
 
+  /**
+   * Determines if the construct is running in SaaS mode (with API credentials)
+   */
+  private static isSaaSMode(props: ChaimBinderProps): boolean {
+    return !!(props.apiKey && props.apiSecret && props.appId);
+  }
+
   private static createAction(
     actionType: 'Create' | 'Update' | 'Delete',
     handler: lambda.Function,
     props: ChaimBinderProps,
-    enhancedDataStore: string
+    enhancedDataStore: string,
+    isSaaSMode: boolean
   ): cr.AwsCustomResourceProps['onCreate'] | cr.AwsCustomResourceProps['onUpdate'] | cr.AwsCustomResourceProps['onDelete'] {
+    const basePayload: any = {
+      RequestType: actionType,
+      ResourceProperties: {
+        SchemaContent: enhancedDataStore,
+        TableArn: props.table.tableArn,
+        TableName: props.table.tableName,
+      },
+    };
+
+    // Add SaaS-specific properties only in SaaS mode
+    if (isSaaSMode) {
+      basePayload.ResourceProperties.AppId = props.appId;
+    }
+
     return {
       service: 'Lambda',
       action: 'invoke',
       parameters: {
         FunctionName: handler.functionName,
-        Payload: JSON.stringify({
-          RequestType: actionType,
-          ResourceProperties: {
-            SchemaContent: enhancedDataStore,
-            AppId: props.appId,
-            TableArn: props.table.tableArn,
-            TableName: props.table.tableName,
-          },
-        }),
+        Payload: JSON.stringify(basePayload),
       },
-      physicalResourceId: cr.PhysicalResourceId.of(`${props.appId}-${Date.now()}`),
+      physicalResourceId: cr.PhysicalResourceId.of(
+        isSaaSMode ? `${props.appId}-${Date.now()}` : `oss-${Date.now()}`
+      ),
     };
   }
 }

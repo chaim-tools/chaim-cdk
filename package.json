@@ -12,8 +12,7 @@
     "test:coverage": "vitest --coverage",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "clean": "rm -rf lib dist",
-    "prepare": "npm run build"
+    "clean": "rm -rf lib dist"
   },
   "keywords": [
     "aws-cdk",
@@ -36,7 +35,8 @@
   "dependencies": {
     "aws-cdk-lib": "^2.0.0",
     "constructs": "^10.0.0",
-    "esbuild": "^0.19.0"
+    "esbuild": "^0.19.0",
+    "@chaim/chaim-bprint-spec": "^0.1.0"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.0.0",

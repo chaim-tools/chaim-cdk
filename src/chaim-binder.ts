@@ -1,70 +1,81 @@
 import * as cdk from 'aws-cdk-lib';
-import * as cr from 'aws-cdk-lib/custom-resources';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import { TableMetadata } from './types/table-metadata';
-import { SchemaService, SchemaData } from './services/schema-service';
+import { ChaimBinderProps } from './types/chaim-binder-props';
+import { PropsValidator } from './validators/props-validator';
+import { SchemaService } from './services/schema-service';
 import { TableMetadataService } from './services/table-metadata-service';
 import { LambdaService } from './services/lambda-service';
 import { CustomResourceService } from './services/custom-resource-service';
-import { PropsValidator } from './validators/props-validator';
-import { ChaimBinderProps } from './types/chaim-binder-props';
 
-export { ChaimBinderProps } from './types/chaim-binder-props';
-
-/**
- * L2 construct that binds a DynamoDB table with a Chaim schema.
- * 
- * This construct creates a CloudFormation Custom Resource that registers
- * the schema with the Chaim SaaS platform, linking the table metadata
- * with the schema definition.
- */
 export class ChaimBinder extends Construct {
-  public readonly customResource: cr.AwsCustomResource;
-  public readonly table: dynamodb.ITable;
+  public readonly mode: 'oss' | 'saas';
 
   constructor(scope: Construct, id: string, props: ChaimBinderProps) {
     super(scope, id);
 
-    // Validate all input properties
+    // Validate props
     PropsValidator.validate(props);
 
+    // Determine mode based on provided credentials
+    this.mode = this.determineMode(props);
+
     // Load and validate schema
-    const schemaData = SchemaService.validateAndLoad(props.schemaPath);
+    const schemaData = SchemaService.readSchema(props.schemaPath);
 
     // Extract and validate table metadata
     const tableMetadata = TableMetadataService.validateAndExtract(props.table, this);
 
-    // Create enhanced data store combining schema and table metadata
-    const enhancedDataStore = this.createEnhancedDataStore(schemaData, tableMetadata);
+    if (this.mode === 'saas') {
+      // SaaS Mode: Deploy Lambda + Custom Resource for external API integration
+      const enhancedDataStore = this.createEnhancedDataStore(schemaData, tableMetadata);
+      const handler = LambdaService.createHandler(this, props, enhancedDataStore);
+      CustomResourceService.createCustomResource(this, props, handler, enhancedDataStore);
+    } else {
+      // OSS Mode: Just create outputs for chaim-cli to consume
+      this.createOSSOutputs(schemaData, tableMetadata);
+    }
+  }
 
-    // Create Lambda handler for custom resource
-    const handler = LambdaService.createHandler(this, props, enhancedDataStore);
-
-    // Create custom resource
-    this.customResource = CustomResourceService.createCustomResource(
-      this,
-      props,
-      handler,
-      enhancedDataStore
-    );
-
-    // Grant necessary permissions
-    CustomResourceService.grantPermissions(this.customResource, handler);
-
-    // Store table reference
-    this.table = props.table;
+  private determineMode(props: ChaimBinderProps): 'oss' | 'saas' {
+    // Use the same logic as PropsValidator.isSaaSMode
+    const hasAnyCredentials = props.apiKey || props.apiSecret || props.appId;
+    return hasAnyCredentials ? 'saas' : 'oss';
   }
 
   /**
    * Creates an enhanced data store that combines schema data with table metadata
+   * Only used in SaaS mode
    */
-  private createEnhancedDataStore(schemaData: SchemaData, tableMetadata: TableMetadata): string {
+  private createEnhancedDataStore(schemaData: any, tableMetadata: any): string {
     const enhancedDataStore = {
       ...schemaData,
       table_metadata: tableMetadata.toJSON(),
     };
     return JSON.stringify(enhancedDataStore);
+  }
+
+  /**
+   * Creates CloudFormation outputs for OSS mode
+   * These outputs can be consumed by chaim-cli or other tools
+   */
+  private createOSSOutputs(schemaData: any, tableMetadata: any): void {
+    new cdk.CfnOutput(this, 'SchemaData', {
+      value: JSON.stringify(schemaData),
+      description: 'Processed schema data for chaim-cli consumption',
+      exportName: `${this.node.id}-SchemaData`,
+    });
+
+    new cdk.CfnOutput(this, 'TableMetadata', {
+      value: JSON.stringify(tableMetadata.toJSON()),
+      description: 'Table metadata for chaim-cli consumption',
+      exportName: `${this.node.id}-TableMetadata`,
+    });
+
+    new cdk.CfnOutput(this, 'Mode', {
+      value: 'oss',
+      description: 'ChaimBinder operating mode',
+      exportName: `${this.node.id}-Mode`,
+    });
   }
 }

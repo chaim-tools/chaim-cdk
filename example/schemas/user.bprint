@@ -1,39 +1,54 @@
 {
-  "chaim_version": 1,
-  "model_name": "User",
-  "fields": [
-    {
-      "name": "id",
-      "type": "string",
-      "required": true,
-      "partition_key": true
+  "schemaVersion": "v1",
+  "namespace": "example.users",
+  "description": "User account information and profile data",
+  "entity": {
+    "primaryKey": {
+      "partitionKey": "userId"
     },
-    {
-      "name": "email",
-      "type": "string",
-      "required": true
-    },
-    {
-      "name": "name",
-      "type": "string",
-      "required": false
-    },
-    {
-      "name": "created_at",
-      "type": "string",
-      "required": true,
-      "sort_key": true
-    },
-    {
-      "name": "is_active",
-      "type": "boolean",
-      "required": false
-    },
-    {
-      "name": "tags",
-      "type": "array",
-      "required": false,
-      "item_type": "string"
+    "fields": [
+      {
+        "name": "userId",
+        "type": "string",
+        "required": true,
+        "description": "Unique user identifier"
+      },
+      {
+        "name": "email",
+        "type": "string",
+        "required": true,
+        "description": "User's email address"
+      },
+      {
+        "name": "firstName",
+        "type": "string",
+        "required": true,
+        "description": "User's first name"
+      },
+      {
+        "name": "lastName",
+        "type": "string",
+        "required": true,
+        "description": "User's last name"
+      },
+      {
+        "name": "isActive",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Whether the user account is active"
+      },
+      {
+        "name": "createdAt",
+        "type": "timestamp",
+        "required": true,
+        "description": "Account creation timestamp"
+      }
+    ],
+    "annotations": {
+      "pii": true,
+      "retention": "7years",
+      "encryption": "required"
     }
-  ]
+  }
 }

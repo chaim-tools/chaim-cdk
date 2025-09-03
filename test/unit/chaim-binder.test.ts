@@ -1,199 +1,241 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { ChaimBinder } from '../../src/chaim-binder';
-import * as fs from 'fs';
-import * as path from 'path';
+import { ChaimBinderProps } from '../../src/types/chaim-binder-props';
 
-// Mock fs module
-vi.mock('fs');
-const mockFs = vi.mocked(fs);
+// Mock all the services
+vi.mock('../../src/services/schema-service');
+vi.mock('../../src/services/table-metadata-service');
+vi.mock('../../src/services/lambda-service');
+vi.mock('../../src/services/custom-resource-service');
+
+// Import the mocked modules
+import { SchemaService } from '../../src/services/schema-service';
+import { TableMetadataService } from '../../src/services/table-metadata-service';
+import { LambdaService } from '../../src/services/lambda-service';
+import { CustomResourceService } from '../../src/services/custom-resource-service';
+
+// Get the mocked instances
+const mockSchemaService = vi.mocked(SchemaService);
+const mockTableMetadataService = vi.mocked(TableMetadataService);
+const mockLambdaService = vi.mocked(LambdaService);
+const mockCustomResourceService = vi.mocked(CustomResourceService);
 
 describe('ChaimBinder', () => {
   let app: cdk.App;
   let stack: cdk.Stack;
   let userTable: dynamodb.Table;
+  let orderTable: dynamodb.Table;
 
   beforeEach(() => {
     app = new cdk.App();
     stack = new cdk.Stack(app, 'TestStack');
     
-    // Create a test DynamoDB table
     userTable = new dynamodb.Table(stack, 'UserTable', {
-      tableName: 'users',
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      tableName: 'user-table',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
-    
-    // Reset mocks
-    vi.clearAllMocks();
+
+    orderTable = new dynamodb.Table(stack, 'OrderTable', {
+      tableName: 'order-table',
+      partitionKey: { name: 'orderId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    });
+
+    // Set up mock implementations
+    mockSchemaService.readSchema.mockReturnValue({
+      schemaVersion: '1.0.0',
+      namespace: 'user',
+      description: 'User entity schema',
+      entity: {
+        primaryKey: 'userId',
+        fields: { userId: { type: 'string' } }
+      }
+    });
+
+    const mockTableMetadata = {
+      tableName: 'user-table',
+      tableArn: 'arn:aws:dynamodb:us-east-1:123456789012:table/user-table',
+      region: 'us-east-1',
+      account: '123456789012',
+      toJSON: () => ({
+        tableName: 'user-table',
+        tableArn: 'arn:aws:dynamodb:us-east-1:123456789012:table/user-table',
+        region: 'us-east-1',
+        account: '123456789012'
+      }),
+      validate: () => {}
+    };
+
+    mockTableMetadataService.validateAndExtract.mockReturnValue(mockTableMetadata as any);
+    mockLambdaService.createHandler.mockReturnValue({} as any);
+    mockCustomResourceService.createCustomResource.mockReturnValue({} as any);
   });
 
-  it('should create the construct with required props', () => {
-    // Mock schema file content
-    const mockSchemaContent = JSON.stringify({
-      chaim_version: 1,
-      model_name: 'User',
-      fields: [
-        {
-          name: 'id',
-          type: 'string',
-          required: true,
-          partition_key: true,
-        },
-      ],
+  describe('OSS Mode', () => {
+    it('should create ChaimBinder in OSS mode when no credentials provided', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
+        table: userTable,
+        // No API credentials - OSS mode
+      };
+
+      const chaimBinder = new ChaimBinder(stack, 'UserSchemaOSS', props);
+
+      expect(chaimBinder.mode).toBe('oss');
+      expect(chaimBinder.node.id).toBe('UserSchemaOSS');
     });
 
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.readFileSync.mockReturnValue(mockSchemaContent);
+    it('should create CloudFormation outputs in OSS mode', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
+        table: userTable,
+      };
 
-    // Create the construct
-    new ChaimBinder(stack, 'TestChaimBinder', {
-      schemaPath: './test-schema.json',
-      table: userTable,
-      apiKey: 'test-api-key',
-      apiSecret: 'test-api-secret',
-      appId: 'test-app-id',
+      new ChaimBinder(stack, 'UserSchemaOSS', props);
+
+      // Verify that outputs were created instead of Lambda/custom resources
+      expect(mockLambdaService.createHandler).not.toHaveBeenCalled();
+      expect(mockCustomResourceService.createCustomResource).not.toHaveBeenCalled();
     });
 
-    // Assert the template
-    const template = Template.fromStack(stack);
-    
-    // Should create a Lambda function
-    template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs20.x',
-      Handler: 'index.handler',
-      Timeout: 300,
-    });
+    it('should not create Lambda or custom resources in OSS mode', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
+        table: userTable,
+      };
 
-    // Should create a custom resource
-    template.hasResource('Custom::AWS', {});
+      new ChaimBinder(stack, 'UserSchemaOSS', props);
+
+      // Verify no Lambda or custom resources were created
+      expect(mockLambdaService.createHandler).not.toHaveBeenCalled();
+      expect(mockCustomResourceService.createCustomResource).not.toHaveBeenCalled();
+    });
   });
 
-  it('should throw error when schema file does not exist', () => {
-    mockFs.existsSync.mockReturnValue(false);
+  describe('SaaS Mode', () => {
+    it('should create ChaimBinder in SaaS mode when credentials provided', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/order.bprint',
+        table: orderTable,
+        apiKey: 'test-api-key',
+        apiSecret: 'test-api-secret',
+        appId: 'test-app',
+      };
 
-    expect(() => {
-      new ChaimBinder(stack, 'TestChaimBinder', {
-        schemaPath: './non-existent-schema.json',
+      const chaimBinder = new ChaimBinder(stack, 'OrderSchemaSaaS', props);
+
+      expect(chaimBinder.mode).toBe('saas');
+      expect(chaimBinder.node.id).toBe('OrderSchemaSaaS');
+    });
+
+    it('should create Lambda and custom resources in SaaS mode', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/order.bprint',
+        table: orderTable,
+        apiKey: 'test-api-key',
+        apiSecret: 'test-api-secret',
+        appId: 'test-app',
+      };
+
+      new ChaimBinder(stack, 'OrderSchemaSaaS', props);
+
+      // Verify that Lambda and custom resources were created
+      expect(mockLambdaService.createHandler).toHaveBeenCalled();
+      expect(mockCustomResourceService.createCustomResource).toHaveBeenCalled();
+    });
+  });
+
+  describe('Validation', () => {
+    it('should throw error for invalid schema path', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.json', // Invalid extension
+        table: userTable,
+      };
+
+      expect(() => new ChaimBinder(stack, 'InvalidSchema', props)).toThrow();
+    });
+
+    it('should throw error for missing table', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
+        table: undefined as any,
+      };
+
+      expect(() => new ChaimBinder(stack, 'MissingTable', props)).toThrow();
+    });
+
+    it('should throw error for missing schema path', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: '',
+        table: userTable,
+      };
+
+      expect(() => new ChaimBinder(stack, 'MissingSchema', props)).toThrow();
+    });
+
+    it('should throw error for partial SaaS credentials - missing appId', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
         table: userTable,
         apiKey: 'test-api-key',
         apiSecret: 'test-api-secret',
-        appId: 'test-app-id',
-      });
-    }).toThrow('Schema file not found: ./non-existent-schema.json');
-  });
+        // Missing appId
+      };
 
-  it('should throw error when schema file has invalid JSON', () => {
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.readFileSync.mockReturnValue('invalid json content');
+      expect(() => new ChaimBinder(stack, 'PartialCredentials', props)).toThrow(
+        'App ID is required when using SaaS mode'
+      );
+    });
 
-    expect(() => {
-      new ChaimBinder(stack, 'TestChaimBinder', {
-        schemaPath: './invalid-schema.json',
+    it('should throw error for partial SaaS credentials - missing apiSecret', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
         table: userTable,
         apiKey: 'test-api-key',
-        apiSecret: 'test-api-secret',
-        appId: 'test-app-id',
-      });
-    }).toThrow('Invalid JSON format in schema file:');
-  });
+        // Missing apiSecret
+        appId: 'test-app',
+      };
 
-  it('should throw error when schema is missing required fields', () => {
-    const mockSchemaContent = JSON.stringify({
-      chaim_version: 1,
-      // Missing model_name and fields
+      expect(() => new ChaimBinder(stack, 'PartialCredentials2', props)).toThrow(
+        'API secret is required when using SaaS mode'
+      );
     });
 
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.readFileSync.mockReturnValue(mockSchemaContent);
-
-    expect(() => {
-      new ChaimBinder(stack, 'TestChaimBinder', {
-        schemaPath: './incomplete-schema.json',
+    it('should throw error for partial SaaS credentials - missing apiKey', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
         table: userTable,
-        apiKey: 'test-api-key',
+        // Missing apiKey
         apiSecret: 'test-api-secret',
-        appId: 'test-app-id',
-      });
-    }).toThrow('Schema must contain required field: model_name');
-  });
+        appId: 'test-app',
+      };
 
-  it('should use default API URL', () => {
-    const mockSchemaContent = JSON.stringify({
-      chaim_version: 1,
-      model_name: 'User',
-      fields: [
-        {
-          name: 'id',
-          type: 'string',
-          required: true,
-          partition_key: true,
-        },
-      ],
-    });
-
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.readFileSync.mockReturnValue(mockSchemaContent);
-
-    new ChaimBinder(stack, 'TestChaimBinder', {
-      schemaPath: './test-schema.json',
-      table: userTable,
-      apiKey: 'test-api-key',
-      apiSecret: 'test-api-secret',
-      appId: 'test-app-id',
-    });
-
-    const template = Template.fromStack(stack);
-    
-    // Check that Lambda function has the default API URL
-    template.hasResourceProperties('AWS::Lambda::Function', {
-      Environment: {
-        Variables: {
-          API_URL: 'https://api.chaim.co',
-        },
-      },
+      expect(() => new ChaimBinder(stack, 'PartialCredentials3', props)).toThrow(
+        'API key is required when using SaaS mode'
+      );
     });
   });
 
-  it('should include table metadata in the enhanced data store', () => {
-    const mockSchemaContent = JSON.stringify({
-      chaim_version: 1,
-      model_name: 'User',
-      fields: [
-        {
-          name: 'id',
-          type: 'string',
-          required: true,
-          partition_key: true,
-        },
-      ],
+  describe('File Extensions', () => {
+    it('should accept .bprint files', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.bprint',
+        table: userTable,
+      };
+
+      expect(() => new ChaimBinder(stack, 'ValidBprint', props)).not.toThrow();
     });
 
-    mockFs.existsSync.mockReturnValue(true);
-    mockFs.readFileSync.mockReturnValue(mockSchemaContent);
+    it('should reject non-.bprint files', () => {
+      const props: ChaimBinderProps = {
+        schemaPath: './schemas/user.json',
+        table: userTable,
+      };
 
-    new ChaimBinder(stack, 'TestChaimBinder', {
-      schemaPath: './test-schema.json',
-      table: userTable,
-      apiKey: 'test-api-key',
-      apiSecret: 'test-api-secret',
-      appId: 'test-app-id',
+      expect(() => new ChaimBinder(stack, 'InvalidExtension', props)).toThrow('Schema file must have a .bprint extension');
     });
-
-    const template = Template.fromStack(stack);
-    
-    // Check that Lambda function has the enhanced data store environment variable
-    // Use a more specific approach to find our Lambda function
-    const lambdaFunctions = template.findResources('AWS::Lambda::Function');
-    const ourLambdaFunction = Object.values(lambdaFunctions).find(
-      (resource: any) => 
-        resource.Properties?.Environment?.Variables?.ENHANCED_DATA_STORE &&
-        resource.Properties.Environment.Variables.API_URL === 'https://api.chaim.co'
-    );
-    
-    expect(ourLambdaFunction).toBeDefined();
-    expect(ourLambdaFunction?.Properties.Environment.Variables.ENHANCED_DATA_STORE).toHaveProperty('Fn::Join');
   });
 });

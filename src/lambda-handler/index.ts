@@ -23,6 +23,7 @@ exports.handler = async (event: CloudFormationEvent, context: any): Promise<Clou
   const requestType = event.RequestType;
   const resourceProperties = event.ResourceProperties;
   
+  const mode = process.env.MODE;
   const apiUrl = process.env.API_URL;
   const apiKey = process.env.API_KEY;
   const apiSecret = process.env.API_SECRET;
@@ -30,8 +31,19 @@ exports.handler = async (event: CloudFormationEvent, context: any): Promise<Clou
   const enhancedDataStore = process.env.ENHANCED_DATA_STORE;
   
   // Validate required environment variables
-  if (!apiUrl || !apiKey || !apiSecret || !appId || !enhancedDataStore) {
-    throw new Error('Missing required environment variables');
+  if (!enhancedDataStore) {
+    throw new Error('Missing required environment variable: ENHANCED_DATA_STORE');
+  }
+  
+  if (!mode) {
+    throw new Error('Missing required environment variable: MODE');
+  }
+  
+  // Validate SaaS mode environment variables if in SaaS mode
+  if (mode === 'saas') {
+    if (!apiUrl || !apiKey || !apiSecret || !appId) {
+      throw new Error('Missing required SaaS environment variables: API_URL, API_KEY, API_SECRET, APP_ID');
+    }
   }
   
   try {
@@ -40,10 +52,22 @@ exports.handler = async (event: CloudFormationEvent, context: any): Promise<Clou
     switch (requestType) {
       case 'Create':
       case 'Update':
-        response = await registerSchema(apiUrl, apiKey, apiSecret, appId, enhancedDataStore);
+        if (mode === 'saas') {
+          response = await registerSchema(apiUrl!, apiKey!, apiSecret!, appId!, enhancedDataStore);
+        } else {
+          // OSS mode: just log and return success
+          response = { status: 'success', message: 'Schema registered in OSS mode' };
+          console.log('OSS Mode: Schema validated and stored locally');
+        }
         break;
       case 'Delete':
-        response = await deleteSchema(apiUrl, apiKey, apiSecret, appId);
+        if (mode === 'saas') {
+          response = await deleteSchema(apiUrl!, apiKey!, apiSecret!, appId!);
+        } else {
+          // OSS mode: just log and return success
+          response = { status: 'deleted', message: 'Schema deleted in OSS mode' };
+          console.log('OSS Mode: Schema removed from local storage');
+        }
         break;
       default:
         throw new Error(`Unsupported request type: ${requestType}`);
@@ -56,11 +80,17 @@ exports.handler = async (event: CloudFormationEvent, context: any): Promise<Clou
     const tableArn = schemaData.table_metadata?.tableArn;
     const tableName = schemaData.table_metadata?.tableName;
     
+    // Generate physical resource ID based on mode
+    const physicalResourceId = mode === 'saas' 
+      ? `${appId}-${Date.now()}`
+      : `oss-${Date.now()}`;
+    
     return {
-      PhysicalResourceId: `${appId}-${Date.now()}`,
+      PhysicalResourceId: physicalResourceId,
       Data: {
-        SchemaId: response.schemaId || appId,
+        SchemaId: response.schemaId || (mode === 'saas' ? appId : 'oss-schema'),
         Status: response.status || 'success',
+        Mode: mode,
         TableArn: tableArn,
         TableName: tableName,
       },

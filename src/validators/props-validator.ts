@@ -1,94 +1,68 @@
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { ChaimBinderProps } from '../types/chaim-binder-props';
 
 export class PropsValidator {
   /**
-   * Validates all required properties for ChaimBinder
+   * Validates all ChaimBinder properties
    */
-  public static validate(props: ChaimBinderProps): void {
-    this.validateBasicProps(props);
+  static validate(props: ChaimBinderProps): void {
     this.validateSchemaPath(props.schemaPath);
     this.validateTable(props.table);
-    this.validateApiCredentials(props);
-    this.validateAppId(props.appId);
-  }
-
-  private static validateBasicProps(props: ChaimBinderProps): void {
-    if (!props) {
-      throw new Error('Props are required');
+    
+    // If any SaaS credentials are provided, validate all required SaaS fields
+    if (this.isSaaSMode(props)) {
+      this.validateApiCredentials(props);
+      this.validateAppId(props);
     }
   }
 
+  /**
+   * Determines if the props indicate SaaS mode (any API credential provided)
+   */
+  private static isSaaSMode(props: ChaimBinderProps): boolean {
+    return !!(props.apiKey || props.apiSecret || props.appId);
+  }
+
+  /**
+   * Validates the schema path
+   */
   private static validateSchemaPath(schemaPath: string): void {
     if (!schemaPath) {
       throw new Error('Schema path is required');
     }
 
-    if (typeof schemaPath !== 'string') {
-      throw new Error('Schema path must be a string');
-    }
-
-    if (schemaPath.trim() === '') {
-      throw new Error('Schema path cannot be empty');
-    }
-
-    if (!schemaPath.endsWith('.json')) {
-      throw new Error('Schema path must be a valid JSON file (.json extension)');
+    if (!schemaPath.endsWith('.bprint')) {
+      throw new Error('Schema file must have a .bprint extension');
     }
   }
 
-  private static validateTable(table: dynamodb.ITable): void {
+  /**
+   * Validates the DynamoDB table
+   */
+  private static validateTable(table: any): void {
     if (!table) {
-      throw new Error('Table is required');
-    }
-
-    if (!(table instanceof dynamodb.Table)) {
-      throw new Error('Table must be a concrete DynamoDB Table construct');
+      throw new Error('DynamoDB table is required');
     }
   }
 
+  /**
+   * Validates API credentials for SaaS mode
+   */
   private static validateApiCredentials(props: ChaimBinderProps): void {
     if (!props.apiKey) {
-      throw new Error('API key is required');
-    }
-
-    if (typeof props.apiKey !== 'string') {
-      throw new Error('API key must be a string');
-    }
-
-    if (props.apiKey.trim() === '') {
-      throw new Error('API key cannot be empty');
+      throw new Error('API key is required when using SaaS mode');
     }
 
     if (!props.apiSecret) {
-      throw new Error('API secret is required');
-    }
-
-    if (typeof props.apiSecret !== 'string') {
-      throw new Error('API secret must be a string');
-    }
-
-    if (props.apiSecret.trim() === '') {
-      throw new Error('API secret cannot be empty');
+      throw new Error('API secret is required when using SaaS mode');
     }
   }
 
-  private static validateAppId(appId: string): void {
-    if (!appId) {
-      throw new Error('App ID is required');
-    }
-
-    if (typeof appId !== 'string') {
-      throw new Error('App ID must be a string');
-    }
-
-    if (appId.trim() === '') {
-      throw new Error('App ID cannot be empty');
-    }
-
-    // Validate app ID format (alphanumeric and hyphens only)
-    if (!/^[a-zA-Z0-9-]+$/.test(appId)) {
-      throw new Error('App ID must contain only alphanumeric characters and hyphens');
+  /**
+   * Validates app ID for SaaS mode
+   */
+  private static validateAppId(props: ChaimBinderProps): void {
+    if (!props.appId) {
+      throw new Error('App ID is required when using SaaS mode');
     }
   }
 }

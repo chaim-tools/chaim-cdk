@@ -4,14 +4,24 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import { ChaimBinderProps } from '../types/chaim-binder-props';
 
-export interface LambdaEnvironment {
-  [key: string]: string;
+export interface BaseEnvironment {
+  ENHANCED_DATA_STORE: string;
+  MODE: string;
+}
+
+export interface OSSEnvironment extends BaseEnvironment {
+  MODE: 'oss';
+}
+
+export interface SaaSEnvironment extends BaseEnvironment {
+  MODE: 'saas';
   API_URL: string;
   API_KEY: string;
   API_SECRET: string;
   APP_ID: string;
-  ENHANCED_DATA_STORE: string;
 }
+
+export type LambdaEnvironment = OSSEnvironment | SaaSEnvironment;
 
 export class LambdaService {
   /**
@@ -34,14 +44,31 @@ export class LambdaService {
     return handler;
   }
 
-  private static createEnvironment(props: ChaimBinderProps, enhancedDataStore: string): LambdaEnvironment {
-    return {
-      API_URL: 'https://api.chaim.co',
-      API_KEY: props.apiKey,
-      API_SECRET: props.apiSecret,
-      APP_ID: props.appId,
-      ENHANCED_DATA_STORE: enhancedDataStore,
-    };
+  private static createEnvironment(props: ChaimBinderProps, enhancedDataStore: string): { [key: string]: string } {
+    const isSaaSMode = this.isSaaSMode(props);
+    
+    if (isSaaSMode) {
+      return {
+        ENHANCED_DATA_STORE: enhancedDataStore,
+        MODE: 'saas',
+        API_URL: 'https://api.chaim.co',
+        API_KEY: props.apiKey!,
+        API_SECRET: props.apiSecret!,
+        APP_ID: props.appId!,
+      };
+    } else {
+      return {
+        ENHANCED_DATA_STORE: enhancedDataStore,
+        MODE: 'oss',
+      };
+    }
+  }
+
+  /**
+   * Determines if the construct is running in SaaS mode (with API credentials)
+   */
+  private static isSaaSMode(props: ChaimBinderProps): boolean {
+    return !!(props.apiKey && props.apiSecret && props.appId);
   }
 
   private static addLoggingPermissions(handler: lambda.Function): void {

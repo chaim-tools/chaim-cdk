@@ -3,25 +3,25 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 /**
  * Properties for the ChaimBinder construct.
  * 
- * @property schemaPath - Path to the .bprint schema file (JSON format)
- * @property table - DynamoDB Table resource to bind with the schema
- * @property apiKey - API key from the Chaim SaaS UI
- * @property apiSecret - API secret from the Chaim SaaS UI
- * @property appId - Application identifier shown in the SaaS platform
+ * @property schemaPath - Path to the .bprint schema file (JSON format) - Required
+ * @property table - DynamoDB Table resource to bind with the schema - Required
+ * @property apiKey - API key from the Chaim SaaS UI - Optional for SaaS mode
+ * @property apiSecret - API secret from the Chaim SaaS UI - Optional for SaaS mode
+ * @property appId - Application identifier shown in the SaaS platform - Optional for SaaS mode
  */
 export interface ChaimBinderProps {
-  /** Path to the .bprint schema file (JSON format) */
+  /** Path to the .bprint schema file (JSON format) - Required */
   schemaPath: string;
   
-  /** DynamoDB Table resource to bind with the schema */
+  /** DynamoDB Table resource to bind with the schema - Required */
   table: dynamodb.ITable;
   
-  /** API key from the Chaim SaaS UI */
-  apiKey: string;
+  /** API key from the Chaim SaaS UI - Optional for SaaS mode */
+  apiKey?: string;
   
-  /** API secret from the Chaim SaaS UI */
-  apiSecret: string;
+  /** API secret from the Chaim SaaS UI - Optional for SaaS mode */
+  apiSecret?: string;
   
-  /** Application identifier shown in the SaaS platform */
-  appId: string;
+  /** Application identifier shown in the SaaS platform - Optional for SaaS mode */
+  appId?: string;
 }
