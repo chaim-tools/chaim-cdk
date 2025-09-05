@@ -1,0 +1,14 @@
+{
+  "name": "chaim-lambda-handler",
+  "version": "1.0.0",
+  "description": "Lambda handler for Chaim CDK custom resource",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/node": "^20.0.0",
+    "aws-sdk": "^2.1500.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

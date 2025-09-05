@@ -31,10 +31,9 @@ export class ChaimBinder extends Construct {
       const enhancedDataStore = this.createEnhancedDataStore(schemaData, tableMetadata);
       const handler = LambdaService.createHandler(this, props, enhancedDataStore);
       CustomResourceService.createCustomResource(this, props, handler, enhancedDataStore);
-    } else {
-      // OSS Mode: Just create outputs for chaim-cli to consume
-      this.createOSSOutputs(schemaData, tableMetadata);
     }
+    // Create outputs for chaim-cli consumption
+    this.createOSSOutputs(schemaData, tableMetadata);
   }
 
   private determineMode(props: ChaimBinderProps): 'oss' | 'saas' {

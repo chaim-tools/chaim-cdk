@@ -87,6 +87,23 @@ describe('SchemaService', () => {
       
       expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include entity field');
     });
+
+    it('should re-throw validation errors with context', () => {
+      mockFs.existsSync.mockReturnValue(true);
+      const invalidSchema = { ...validSchema, entity: undefined };
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
+      
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema validation failed for ./schemas/user.bprint: Schema must include entity field');
+    });
+
+    it('should re-throw non-Error exceptions as-is', () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(() => {
+        throw 'string error';
+      });
+      
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('string error');
+    });
   });
 
   describe('schema structure validation', () => {

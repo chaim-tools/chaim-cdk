@@ -27,16 +27,16 @@
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
     "eslint": "^8.0.0",
     "typescript": "~5.0.0",
-    "vitest": "^1.0.0",
-    "@vitest/coverage-v8": "^1.0.0"
+    "vitest": "^1.0.0"
   },
   "dependencies": {
+    "@chaim/chaim-bprint-spec": "file:../chaim-bprint-spec",
     "aws-cdk-lib": "^2.0.0",
     "constructs": "^10.0.0",
-    "esbuild": "^0.19.0",
-    "@chaim/chaim-bprint-spec": "^0.1.0"
+    "esbuild": "^0.19.0"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.0.0",

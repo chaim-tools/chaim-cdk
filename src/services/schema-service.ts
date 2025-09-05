@@ -3,7 +3,7 @@ import { SchemaData, validateSchema } from '@chaim/chaim-bprint-spec';
 
 export class SchemaService {
   /**
-   * Validates that the schema file path exists and has a .bprint extensionraftq
+   * Validates that the schema file path exists and has a .bprint extension
    */
   static validateSchemaPath(schemaPath: string): void {
     if (!schemaPath) {
@@ -20,14 +20,14 @@ export class SchemaService {
   }
 
   /**
-   * Reads and parses the schema file using official chaim-bprint-spec validation
+   * Reads and parses the schema file using our local validator based on the official spec
    */
   static readSchema(schemaPath: string): SchemaData {
     try {
       const content = fs.readFileSync(schemaPath, 'utf-8');
       const rawSchema = JSON.parse(content);
       
-      // Use the official chaim-bprint-spec validation
+      // Use the official chaim-bprint-spec validator
       return validateSchema(rawSchema);
     } catch (error) {
       if (error instanceof SyntaxError) {
