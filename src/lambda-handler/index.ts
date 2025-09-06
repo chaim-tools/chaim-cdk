@@ -1,6 +1,6 @@
 import https from 'https';
 import { URL } from 'url';
-import * as AWS from 'aws-sdk';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 
 // Simple structured logger for Lambda
 interface Logger {
@@ -53,7 +53,6 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
   });
   
   const requestType = event.RequestType;
-  const resourceProperties = event.ResourceProperties;
   
   const mode = process.env.MODE;
   const apiUrl = process.env.API_URL;
@@ -62,8 +61,8 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
   const useSecretsManager = process.env.USE_SECRETS_MANAGER === 'true';
   const secretName = process.env.SECRET_NAME;
   
-  // Configuration with defaults
-  const config = {
+  // Configuration with defaults (used in environment setup)
+  const _config = {
     timeout: parseInt(process.env.API_TIMEOUT || '30000'),
     retryAttempts: parseInt(process.env.API_RETRY_ATTEMPTS || '3'),
   };
@@ -220,7 +219,6 @@ async function deleteSchema(apiUrl: string, apiKey: string, apiSecret: string, a
 
 async function makeHttpRequest(options: any, data?: string, operation: string = 'httpRequest'): Promise<ApiResponse> {
   const maxRetries = parseInt(process.env.API_RETRY_ATTEMPTS || '3');
-  const timeout = parseInt(process.env.API_TIMEOUT || '30000');
   let lastError: Error | null = null;
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -295,12 +293,13 @@ async function makeHttpRequest(options: any, data?: string, operation: string = 
 }
 
 async function getCredentialsFromSecretsManager(secretName: string): Promise<{ apiKey: string; apiSecret: string }> {
-  const secretsManager = new AWS.SecretsManager();
+  const secretsManager = new SecretsManagerClient();
   
   try {
     logger.info('Retrieving credentials from Secrets Manager', { secretName });
     
-    const result = await secretsManager.getSecretValue({ SecretId: secretName }).promise();
+    const command = new GetSecretValueCommand({ SecretId: secretName });
+    const result = await secretsManager.send(command);
     
     if (!result.SecretString) {
       throw new Error('Secret value is empty');

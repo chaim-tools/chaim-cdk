@@ -6,7 +6,7 @@
   "type": "commonjs",
   "dependencies": {
     "@types/node": "^20.0.0",
-    "aws-sdk": "^2.1500.0"
+    "@aws-sdk/client-secrets-manager": "^3.0.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

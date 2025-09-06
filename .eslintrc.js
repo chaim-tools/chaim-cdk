@@ -7,7 +7,7 @@ module.exports = {
   plugins: ['@typescript-eslint'],
   extends: [
     'eslint:recommended',
-    '@typescript-eslint/recommended',
+    'plugin:@typescript-eslint/recommended',
   ],
   rules: {
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
@@ -19,4 +19,14 @@ module.exports = {
     node: true,
     es6: true,
   },
+  ignorePatterns: [
+    'lib/**/*',
+    'coverage/**/*',
+    'node_modules/**/*',
+    '*.js',
+    '*.d.ts',
+    'test/**/*',
+    'example/**/*',
+    'vitest.config.ts',
+  ],
 };
