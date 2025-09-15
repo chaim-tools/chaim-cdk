@@ -40,27 +40,5 @@ export class ExampleStack extends cdk.Stack {
       apiSecret: process.env.CHAIM_API_SECRET,
       appId: 'my-app-orders',
     });
-
-    // Example 3: Conditional SaaS Mode based on environment
-    // You can conditionally enable SaaS features based on deployment context
-    const isProduction = this.node.tryGetContext('environment') === 'production';
-    
-    if (isProduction) {
-      // Production: Enable SaaS features for team collaboration
-      new ChaimBinder(this, 'ProductionSchema', {
-        schemaPath: './schemas/production.bprint',
-        table: userTable,
-        apiKey: process.env.CHAIM_API_KEY,
-        apiSecret: process.env.CHAIM_API_SECRET,
-        appId: 'production-app',
-      });
-    } else {
-      // Development: Use OSS mode for simplicity
-      new ChaimBinder(this, 'DevelopmentSchema', {
-        schemaPath: './schemas/development.bprint',
-        table: userTable,
-        // No credentials - OSS mode
-      });
-    }
   }
 }
