@@ -19,7 +19,7 @@ npm install @chaim/cdk
 
 ### 1. Define Your Schema
 
-Create a `.bprint` file following the [chaim-bprint-spec](https://github.com/chaim-builder/chaim-bprint-spec):
+Create a `.bprint` file following the [chaim-bprint-spec](https://github.com/chaim-tools/chaim-bprint-spec):
 
 ```json
 {

@@ -61,12 +61,6 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
   const useSecretsManager = process.env.USE_SECRETS_MANAGER === 'true';
   const secretName = process.env.SECRET_NAME;
   
-  // Configuration with defaults (used in environment setup)
-  const _config = {
-    timeout: parseInt(process.env.API_TIMEOUT || '30000'),
-    retryAttempts: parseInt(process.env.API_RETRY_ATTEMPTS || '3'),
-  };
-  
   // Validate required environment variables
   if (!enhancedDataStore) {
     throw new Error('Missing required environment variable: ENHANCED_DATA_STORE');

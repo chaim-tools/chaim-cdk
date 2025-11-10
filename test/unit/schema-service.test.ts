@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SchemaService } from '../../src/services/schema-service';
-import { SchemaData } from '@chaim/chaim-bprint-spec';
+import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import * as fs from 'fs';
 
 // Mock fs module

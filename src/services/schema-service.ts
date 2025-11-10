@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { SchemaData, validateSchema } from '@chaim/chaim-bprint-spec';
+import { SchemaData, validateSchema } from '@chaim-tools/chaim-bprint-spec';
 
 export class SchemaService {
   /**

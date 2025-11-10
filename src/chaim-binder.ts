@@ -1,5 +1,4 @@
 import * as cdk from 'aws-cdk-lib';
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import { ChaimBinderProps } from './types/chaim-binder-props';
 import { PropsValidator } from './validators/props-validator';

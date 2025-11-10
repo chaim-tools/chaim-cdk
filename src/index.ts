@@ -4,4 +4,4 @@ export { ChaimBinder } from './chaim-binder';
 // Type exports
 export { ChaimBinderProps } from './types/chaim-binder-props';
 export { TableMetadata } from './types/table-metadata';
-export { SchemaData } from '@chaim/chaim-bprint-spec';
+export { SchemaData } from '@chaim-tools/chaim-bprint-spec';

@@ -20,6 +20,12 @@ export class TableMetadata {
   /** The ARN of the encryption key used by the table (optional) */
   public readonly encryptionKey?: string;
 
+  /** The partition key attribute name */
+  public readonly partitionKey: string;
+
+  /** The sort key attribute name (optional) */
+  public readonly sortKey?: string;
+
   /**
    * Creates a new TableMetadata instance.
    * 
@@ -27,25 +33,31 @@ export class TableMetadata {
    * @param tableArn - The ARN of the DynamoDB table
    * @param region - The AWS region where the table is located
    * @param account - The AWS account ID where the table is located
+   * @param partitionKey - The partition key attribute name
    * @param encryptionKey - The ARN of the encryption key used by the table (optional)
+   * @param sortKey - The sort key attribute name (optional)
    */
   constructor(
     tableName: string,
     tableArn: string,
     region: string,
     account: string,
-    encryptionKey?: string
+    partitionKey: string,
+    encryptionKey?: string,
+    sortKey?: string
   ) {
     this.tableName = tableName;
     this.tableArn = tableArn;
     this.region = region;
     this.account = account;
+    this.partitionKey = partitionKey;
     this.encryptionKey = encryptionKey;
+    this.sortKey = sortKey;
   }
 
   /**
    * Converts the metadata to a JSON-serializable object.
-   * Only includes encryptionKey if it exists.
+   * Only includes encryptionKey and sortKey if they exist.
    * 
    * @returns A plain object representation of the table metadata
    */
@@ -55,6 +67,8 @@ export class TableMetadata {
       tableArn: this.tableArn,
       region: this.region,
       account: this.account,
+      partitionKey: this.partitionKey,
+      ...(this.sortKey && { sortKey: this.sortKey }),
       ...(this.encryptionKey && { encryptionKey: this.encryptionKey }),
     };
   }
@@ -71,7 +85,9 @@ export class TableMetadata {
       data.tableArn,
       data.region,
       data.account,
-      data.encryptionKey
+      data.partitionKey,
+      data.encryptionKey,
+      data.sortKey
     );
   }
 
@@ -92,6 +108,9 @@ export class TableMetadata {
     }
     if (!this.account) {
       throw new Error('Account is required');
+    }
+    if (!this.partitionKey) {
+      throw new Error('Partition key is required');
     }
   }
 }
