@@ -1,125 +1,115 @@
-# Chaim CDK Construct
+# Chaim CDK Monorepo
 
-A CDK v2 construct that binds DynamoDB tables with Chaim schemas, supporting both OSS and SaaS modes.
+> **Note**: This is the **development repository** for Chaim CDK packages. 
+> 
+> **For customers**: Install `@chaim-tools/cdk-lib` from npm:
+> ```bash
+> npm install @chaim-tools/cdk-lib
+> # or
+> pnpm add @chaim-tools/cdk-lib
+> ```
+> 
+> See the [package README](./packages/cdk-lib/README.md) for customer-facing documentation.
 
-## What This Does
+---
 
-**ChaimBinder** is a CDK construct that validates your `.bprint` schema files and binds them to DynamoDB tables. It operates in two modes:
+A monorepo containing AWS CDK constructs and CloudFormation Registry resources for Chaim schema management.
 
-- **OSS Mode**: Schema validation and metadata extraction with CloudFormation outputs
-- **SaaS Mode**: Full schema management with external API integration
+## Overview
 
-## Installation
+This monorepo contains the source code for:
+
+1. **CloudFormation Registry Provider** (`packages/cfn-provider-dynamodb-binding`) - Lambda-based provider for `Chaim::DynamoDB::Binding` resource type
+2. **CDK Activator** (`packages/activator`) - Stack to activate the CloudFormation Registry type in your account
+3. **CDK L2 Library** (`packages/cdk-lib`) - High-level CDK constructs published as `@chaim-tools/cdk-lib` on npm
+4. **Example App** (`packages/examples/consumer-cdk-app`) - Example CDK application demonstrating usage
+
+## Development Setup
+
+For developers working on this repository:
 
 ```bash
-npm install @chaim/cdk
+# Install pnpm if you haven't already
+npm install -g pnpm
+
+# Install dependencies
+pnpm install
+
+# Build all packages
+pnpm build
 ```
 
-## Quick Start
+## Customer Quick Start
 
-### 1. Define Your Schema
+> **For end users**: See the [customer documentation](./packages/cdk-lib/README.md) after installing from npm.
 
-Create a `.bprint` file following the [chaim-bprint-spec](https://github.com/chaim-tools/chaim-bprint-spec):
+The typical customer workflow:
 
-```json
-{
-  "schemaVersion": "1.0.0",
-  "namespace": "user",
-  "description": "User entity schema",
-  "entity": {
-    "primaryKey": "userId",
-    "fields": {
-      "userId": { "type": "string", "required": true },
-      "email": { "type": "string", "required": true }
-    }
-  }
-}
+1. **Install the package**: `npm install @chaim-tools/cdk-lib`
+2. **Deploy the Activator stack** (one-time setup per account/region)
+3. **Use `ChaimDynamoBinding`** in your CDK stacks
+
+See `packages/activator/README.md` for activator deployment instructions.
+
+## Example App
+
+See `packages/examples/consumer-cdk-app` for a complete example:
+
+```bash
+cd packages/examples/consumer-cdk-app
+pnpm build
+pnpm cdk synth
 ```
 
-### 2. Use in Your CDK Stack
-
-```typescript
-import { ChaimBinder } from '@chaim/cdk';
-
-// OSS Mode: No API credentials required
-new ChaimBinder(this, 'UserSchema', {
-  schemaPath: './schemas/user.bprint',
-  table: userTable,
-  // Creates CloudFormation outputs for chaim-cli consumption
-});
-
-// SaaS Mode: With API credentials for advanced features
-new ChaimBinder(this, 'OrderSchema', {
-  schemaPath: './schemas/order.bprint',
-  table: orderTable,
-  apiKey: process.env.CHAIM_API_KEY,
-  apiSecret: process.env.CHAIM_API_SECRET,
-  appId: 'my-app',
-});
-```
-
-## How It Works
-
-### OSS Mode (Default)
-- ✅ Validates `.bprint` schema files
-- ✅ Extracts DynamoDB table metadata
-- ✅ Creates CloudFormation outputs for `chaim-cli` consumption
-- ❌ **No Lambda functions deployed**
-- ❌ **No external API calls**
-- 💰 **Zero runtime costs**
-
-### SaaS Mode (Optional)
-- ✅ All OSS functionality
-- ✅ Deploys Lambda function for external API integration
-- ✅ Creates custom resource for lifecycle management
-- ✅ Schema registration with Chaim platform
-- 💰 **Lambda execution costs apply**
-
-## Usage Modes
-
-### OSS Mode - Perfect for:
-- Individual developers
-- Small teams
-- Cost-conscious deployments
-- Offline development
-- Schema validation only
-
-### SaaS Mode - Perfect for:
-- Team collaboration
-- Schema versioning
-- Compliance tracking
-- Advanced analytics
-- Multi-environment management
-
-## Architecture
+## Package Structure
 
 ```
-OSS Mode:
-.bprint → CDK → Validation → CloudFormation Outputs → chaim-cli
-
-SaaS Mode:
-.bprint → CDK → Validation → Lambda + Custom Resource → Chaim Platform
+chaim-cdk/
+├── packages/
+│   ├── cdk-lib/                    # CDK L2 constructs
+│   ├── cfn-provider-dynamodb-binding/  # CloudFormation Registry provider
+│   ├── activator/                  # Type activation stack
+│   └── examples/
+│       └── consumer-cdk-app/      # Example usage
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+└── package.json
 ```
 
-## What You Get
+## Pilot Limitations
 
-### OSS Mode Outputs
-- `SchemaData`: Your processed schema for `chaim-cli`
-- `TableMetadata`: DynamoDB table information
-- `Mode`: Operating mode indicator
+For this pilot release:
 
-### SaaS Mode Resources
-- Lambda function for external API calls
-- Custom resource for lifecycle management
-- All OSS outputs plus runtime capabilities
+- **Inline schema only**: Schemas are sent inline in the CloudFormation resource (max ~200 KB)
+- **No S3 persistence**: Production will switch to S3 pointers
+- **HTTPS ingest**: Provider posts directly to your ingest API endpoint
 
-## Next Steps
+## IAM Permissions
 
-1. **Deploy your CDK stack** with ChaimBinder
-2. **Use `chaim-cli`** to consume the CloudFormation outputs
-3. **Generate your MapperClient** from the schema data
-4. **Integrate** the client into your application code
+The provider execution role requires:
 
-## Examples
+- `dynamodb:DescribeTable` - To validate table metadata
+- `secretsmanager:GetSecretValue` - To fetch API credentials
+- `sts:GetCallerIdentity` - To get AWS account ID
 
-See `example/example-stack.ts` for complete usage examples including conditional SaaS mode activation based on environment.
+These are automatically granted by the Activator stack.
+
+## Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Build all packages
+pnpm build
+
+# Run tests
+pnpm test
+
+# Lint
+pnpm lint
+```
+
+## License
+
+Apache-2.0
