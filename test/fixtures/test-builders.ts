@@ -1,8 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import { ChaimBinder } from '../../src/chaim-binder';
-import { ChaimBinderProps } from '../../src/types/chaim-binder-props';
+import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
+import { ChaimDynamoDBBinderProps } from '../../src/binders/chaim-dynamodb-binder';
+import { ChaimCredentials, IChaimCredentials } from '../../src/types/credentials';
 
 /**
  * Options for creating a test stack
@@ -35,36 +36,26 @@ export interface TestTableOptions {
 }
 
 /**
- * Options for creating a ChaimBinder in OSS mode
+ * Options for creating a ChaimDynamoDBBinder
  */
-export interface ChaimBinderOSSOptions {
+export interface ChaimBinderOptions {
   /** Construct id */
   id?: string;
   /** Schema file path */
   schemaPath: string;
   /** DynamoDB table */
   table: dynamodb.ITable;
-}
-
-/**
- * Options for creating a ChaimBinder in SaaS mode
- */
-export interface ChaimBinderSaaSOptions extends ChaimBinderOSSOptions {
-  /** API key */
-  apiKey: string;
-  /** API secret */
-  apiSecret: string;
   /** Application ID */
   appId: string;
-  /** Use Secrets Manager (optional) */
-  useSecretsManager?: boolean;
-  /** Secret name (optional) */
-  secretName?: string;
+  /** Credentials (use ChaimCredentials factory) */
+  credentials: IChaimCredentials;
+  /** Failure mode */
+  failureMode?: 'BEST_EFFORT' | 'STRICT';
 }
 
 /**
  * Creates a CDK App and Stack for testing
- * 
+ *
  * @param options - Stack creation options
  * @returns Object containing app and stack
  */
@@ -79,7 +70,7 @@ export function createTestStack(options: TestStackOptions = {}): {
 
 /**
  * Creates a DynamoDB table for testing
- * 
+ *
  * @param scope - The construct scope (usually a Stack)
  * @param options - Table creation options
  * @returns The created DynamoDB table
@@ -91,7 +82,7 @@ export function createTestTable(
   const tableId = options.id || 'TestTable';
   const partitionKeyName = options.partitionKeyName || 'id';
   const partitionKeyType = options.partitionKeyType || dynamodb.AttributeType.STRING;
-  
+
   const tableProps: dynamodb.TableProps = {
     tableName: options.tableName || `${tableId.toLowerCase()}-table`,
     partitionKey: {
@@ -100,7 +91,7 @@ export function createTestTable(
     },
     billingMode: options.billingMode || dynamodb.BillingMode.PAY_PER_REQUEST,
   };
-  
+
   // Add sort key if provided
   if (options.sortKeyName && options.sortKeyType) {
     tableProps.sortKey = {
@@ -108,50 +99,75 @@ export function createTestTable(
       type: options.sortKeyType,
     };
   }
-  
+
   return new dynamodb.Table(scope, tableId, tableProps);
 }
 
 /**
- * Creates a ChaimBinder construct in OSS mode
- * 
+ * Creates a ChaimDynamoDBBinder construct with direct API credentials
+ *
  * @param scope - The construct scope (usually a Stack)
- * @param options - ChaimBinder creation options
- * @returns The created ChaimBinder construct
+ * @param options - ChaimBinder creation options (without credentials)
+ * @param apiKey - API key
+ * @param apiSecret - API secret
+ * @returns The created ChaimDynamoDBBinder construct
  */
-export function createChaimBinderOSS(
+export function createChaimBinderWithApiKeys(
   scope: Construct,
-  options: ChaimBinderOSSOptions
-): ChaimBinder {
-  const props: ChaimBinderProps = {
+  options: Omit<ChaimBinderOptions, 'credentials'>,
+  apiKey: string,
+  apiSecret: string
+): ChaimDynamoDBBinder {
+  const props: ChaimDynamoDBBinderProps = {
     schemaPath: options.schemaPath,
     table: options.table,
+    appId: options.appId,
+    credentials: ChaimCredentials.fromApiKeys(apiKey, apiSecret),
+    failureMode: options.failureMode,
   };
-  
-  return new ChaimBinder(scope, options.id || 'TestChaimBinderOSS', props);
+
+  return new ChaimDynamoDBBinder(scope, options.id || 'TestChaimBinder', props);
 }
 
 /**
- * Creates a ChaimBinder construct in SaaS mode
- * 
+ * Creates a ChaimDynamoDBBinder construct with Secrets Manager credentials
+ *
  * @param scope - The construct scope (usually a Stack)
- * @param options - ChaimBinder creation options
- * @returns The created ChaimBinder construct
+ * @param options - ChaimBinder creation options (without credentials)
+ * @param secretName - Secrets Manager secret name
+ * @returns The created ChaimDynamoDBBinder construct
  */
-export function createChaimBinderSaaS(
+export function createChaimBinderWithSecretsManager(
   scope: Construct,
-  options: ChaimBinderSaaSOptions
-): ChaimBinder {
-  const props: ChaimBinderProps = {
+  options: Omit<ChaimBinderOptions, 'credentials'>,
+  secretName: string
+): ChaimDynamoDBBinder {
+  const props: ChaimDynamoDBBinderProps = {
     schemaPath: options.schemaPath,
     table: options.table,
-    apiKey: options.apiKey,
-    apiSecret: options.apiSecret,
     appId: options.appId,
-    useSecretsManager: options.useSecretsManager,
-    secretName: options.secretName,
+    credentials: ChaimCredentials.fromSecretsManager(secretName),
+    failureMode: options.failureMode,
   };
-  
-  return new ChaimBinder(scope, options.id || 'TestChaimBinderSaaS', props);
+
+  return new ChaimDynamoDBBinder(scope, options.id || 'TestChaimBinder', props);
 }
 
+/**
+ * Creates test credentials using direct API keys
+ */
+export function createTestCredentials(
+  apiKey: string = 'test-api-key',
+  apiSecret: string = 'test-api-secret'
+): IChaimCredentials {
+  return ChaimCredentials.fromApiKeys(apiKey, apiSecret);
+}
+
+/**
+ * Creates test credentials using Secrets Manager
+ */
+export function createTestSecretsManagerCredentials(
+  secretName: string = 'chaim/test-credentials'
+): IChaimCredentials {
+  return ChaimCredentials.fromSecretsManager(secretName);
+}

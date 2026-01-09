@@ -2,6 +2,12 @@ import https from 'https';
 import { URL } from 'url';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 
+/** Default API endpoint */
+const DEFAULT_API_BASE_URL = 'https://ingest.chaim.co';
+
+/** Default max snapshot size (10MB) */
+const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
+
 // Simple structured logger for Lambda
 interface Logger {
   info(message: string, meta?: Record<string, any>): void;
@@ -55,11 +61,11 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
   const requestType = event.RequestType;
   
   const mode = process.env.MODE;
-  const apiUrl = process.env.API_URL;
+  const apiUrl = process.env.CHAIM_API_BASE_URL || process.env.API_URL || DEFAULT_API_BASE_URL;
   const appId = process.env.APP_ID;
   const enhancedDataStore = process.env.ENHANCED_DATA_STORE;
-  const useSecretsManager = process.env.USE_SECRETS_MANAGER === 'true';
   const secretName = process.env.SECRET_NAME;
+  const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || String(DEFAULT_MAX_SNAPSHOT_BYTES));
   
   // Validate required environment variables
   if (!enhancedDataStore) {
@@ -72,19 +78,16 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
   
   // Validate SaaS mode environment variables if in SaaS mode
   if (mode === 'saas') {
-    if (!apiUrl || !appId) {
-      throw new Error('Missing required SaaS environment variables: API_URL, APP_ID');
+    if (!appId) {
+      throw new Error('Missing required SaaS environment variables: APP_ID');
     }
     
-    if (useSecretsManager) {
-      if (!secretName) {
-        throw new Error('Missing required environment variable: SECRET_NAME when using Secrets Manager');
-      }
-    } else {
+    // Check for credentials: either SECRET_NAME or API_KEY/API_SECRET
+    if (!secretName) {
       const apiKey = process.env.API_KEY;
       const apiSecret = process.env.API_SECRET;
       if (!apiKey || !apiSecret) {
-        throw new Error('Missing required SaaS environment variables: API_KEY, API_SECRET');
+        throw new Error('Missing required SaaS credentials: provide SECRET_NAME or API_KEY/API_SECRET');
       }
     }
   }
@@ -97,21 +100,28 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
     let apiSecret: string;
     
     if (mode === 'saas') {
-      if (useSecretsManager && secretName) {
+      if (secretName) {
+        // Secrets Manager mode - SECRET_NAME presence indicates this mode
         const credentials = await getCredentialsFromSecretsManager(secretName);
         apiKey = credentials.apiKey;
         apiSecret = credentials.apiSecret;
       } else {
+        // Direct credentials mode
         apiKey = process.env.API_KEY!;
         apiSecret = process.env.API_SECRET!;
       }
+    }
+    
+    // Check payload size against guardrail
+    if (enhancedDataStore.length > maxSnapshotBytes) {
+      throw new Error(`Snapshot size (${enhancedDataStore.length} bytes) exceeds maximum allowed (${maxSnapshotBytes} bytes)`);
     }
     
     switch (requestType) {
       case 'Create':
       case 'Update':
         if (mode === 'saas') {
-          response = await registerSchema(apiUrl!, apiKey!, apiSecret!, appId!, enhancedDataStore);
+          response = await registerSchema(apiUrl, apiKey!, apiSecret!, appId!, enhancedDataStore);
         } else {
           // OSS mode: just log and return success
           response = { status: 'success', message: 'Schema registered in OSS mode' };
@@ -120,7 +130,7 @@ export const handler = async (event: CloudFormationEvent, context: any): Promise
         break;
       case 'Delete':
         if (mode === 'saas') {
-          response = await deleteSchema(apiUrl!, apiKey!, apiSecret!, appId!);
+          response = await deleteSchema(apiUrl, apiKey!, apiSecret!, appId!);
         } else {
           // OSS mode: just log and return success
           response = { status: 'deleted', message: 'Schema deleted in OSS mode' };
@@ -316,4 +326,3 @@ async function getCredentialsFromSecretsManager(secretName: string): Promise<{ a
     throw new Error(`Failed to retrieve credentials from Secrets Manager: ${(error as Error).message}`);
   }
 }
-

@@ -1,9 +1,13 @@
 {
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "lib",
-    "rootDir": "lib",
-    "typeRoots": ["../../../node_modules/@types"]
+    "outDir": ".",
+    "rootDir": ".",
+    "typeRoots": ["../../../node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@chaim-tools/cdk-lib": ["../../cdk-lib/lib"]
+    }
   },
   "exclude": [
     "node_modules",
@@ -16,4 +20,3 @@
     "bin/**/*"
   ]
 }
-

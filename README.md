@@ -1,114 +1,115 @@
-# Chaim CDK Monorepo
+# chaim-cdk
 
-> **Note**: This is the **development repository** for Chaim CDK packages. 
-> 
-> **For customers**: Install `@chaim-tools/cdk-lib` from npm:
-> ```bash
-> npm install @chaim-tools/cdk-lib
-> # or
-> pnpm add @chaim-tools/cdk-lib
-> ```
-> 
-> See the [package README](./packages/cdk-lib/README.md) for customer-facing documentation.
+**Add data governance to your DynamoDB tables in 3 lines of CDK.**
 
----
+Chaim captures your schema intent at deploy time and publishes it to the Chaim platform. The CDK construct has no runtime overhead and requires no agents.
 
-A monorepo containing AWS CDK constructs and CloudFormation Registry resources for Chaim schema management.
-
-## Overview
-
-This monorepo contains the source code for:
-
-1. **CloudFormation Registry Provider** (`packages/cfn-provider-dynamodb-binding`) - Lambda-based provider for `Chaim::DynamoDB::Binding` resource type
-2. **CDK Activator** (`packages/activator`) - Stack to activate the CloudFormation Registry type in your account
-3. **CDK L2 Library** (`packages/cdk-lib`) - High-level CDK constructs published as `@chaim-tools/cdk-lib` on npm
-4. **Example App** (`packages/examples/consumer-cdk-app`) - Example CDK application demonstrating usage
-
-## Development Setup
-
-For developers working on this repository:
+## Installation
 
 ```bash
-# Install pnpm if you haven't already
-npm install -g pnpm
-
-# Install dependencies
-pnpm install
-
-# Build all packages
-pnpm build
+npm install @chaim-tools/cdk-lib
 ```
 
-## Customer Quick Start
+## Add to an Existing Table
 
-> **For end users**: See the [customer documentation](./packages/cdk-lib/README.md) after installing from npm.
+Already have a DynamoDB table? Add Chaim in seconds:
 
-The typical customer workflow:
+```typescript
+import { ChaimDynamoDBBinder, ChaimCredentials } from '@chaim-tools/cdk-lib';
 
-1. **Install the package**: `npm install @chaim-tools/cdk-lib`
-2. **Deploy the Activator stack** (one-time setup per account/region)
-3. **Use `ChaimDynamoBinding`** in your CDK stacks
+// Your existing CDK stack
+const usersTable = new dynamodb.Table(this, 'UsersTable', {
+  partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+});
 
-See `packages/activator/README.md` for activator deployment instructions.
+// Add Chaim - that's it
+new ChaimDynamoDBBinder(this, 'UsersSchema', {
+  schemaPath: './schemas/users.bprint',
+  table: usersTable,
+  appId: 'my-app',
+  credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+});
+```
 
-## Example App
+Your table deploys exactly as before. Chaim captures the schema and table metadata automatically.
 
-See `packages/examples/consumer-cdk-app` for a complete example:
+## Credentials Setup
+
+Store your Chaim API credentials in AWS Secrets Manager:
 
 ```bash
-cd packages/examples/consumer-cdk-app
-pnpm build
-pnpm cdk synth
+aws secretsmanager create-secret \
+  --name chaim/credentials \
+  --secret-string '{"apiKey":"your-api-key","apiSecret":"your-api-secret"}'
 ```
 
-## Package Structure
+Then reference it in your CDK:
 
-```
-chaim-cdk/
-├── packages/
-│   ├── cdk-lib/                    # CDK L2 constructs
-│   ├── cfn-provider-dynamodb-binding/  # CloudFormation Registry provider
-│   ├── activator/                  # Type activation stack
-│   └── examples/
-│       └── consumer-cdk-app/      # Example usage
-├── pnpm-workspace.yaml
-├── tsconfig.base.json
-└── package.json
+```typescript
+credentials: ChaimCredentials.fromSecretsManager('chaim/credentials')
 ```
 
-## Pilot Limitations
+For local development, you can use direct credentials:
 
-For this pilot release:
-
-- **Inline schema only**: Schemas are sent inline in the CloudFormation resource (max ~200 KB)
-- **No S3 persistence**: Production will switch to S3 pointers
-- **HTTPS ingest**: Provider posts directly to your ingest API endpoint
-
-## IAM Permissions
-
-The provider execution role requires:
-
-- `dynamodb:DescribeTable` - To validate table metadata
-- `secretsmanager:GetSecretValue` - To fetch API credentials
-- `sts:GetCallerIdentity` - To get AWS account ID
-
-These are automatically granted by the Activator stack.
-
-## Development
-
-```bash
-# Install dependencies
-pnpm install
-
-# Build all packages
-pnpm build
-
-# Run tests
-pnpm test
-
-# Lint
-pnpm lint
+```typescript
+credentials: ChaimCredentials.fromApiKeys(
+  process.env.CHAIM_API_KEY!,
+  process.env.CHAIM_API_SECRET!
+)
 ```
+
+## What Happens at Deploy
+
+When you run `cdk deploy`:
+
+1. **Validate** - Your `.bprint` schema is validated
+2. **Capture** - Table metadata is extracted (keys, indexes, TTL, streams), along with high-level AWS account details for context
+3. **Upload** - Schema + metadata is securely uploaded to Chaim
+4. **Done** - Your stack deploys normally
+
+The CDK construct runs only at deploy time - no runtime overhead in your infrastructure.
+
+> **Note**: While the CDK has no runtime impact, Chaim's full workflow includes using the `chaim-cli` to generate type-safe DTOs and mapper clients for your application. These generated artifacts enforce that your application's data structures match the schema definition.
+
+## Failure Handling
+
+By default, Chaim uses `BEST_EFFORT` mode - your deployment succeeds even if ingestion fails.
+
+For critical environments, use `STRICT` mode to roll back on failure:
+
+```typescript
+import { FailureMode } from '@chaim-tools/cdk-lib';
+
+new ChaimDynamoDBBinder(this, 'UsersSchema', {
+  schemaPath: './schemas/users.bprint',
+  table: usersTable,
+  appId: 'my-app',
+  credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+  failureMode: FailureMode.STRICT,
+});
+```
+
+| Mode | Behavior |
+|------|----------|
+| `BEST_EFFORT` (default) | Deployment continues if ingestion fails |
+| `STRICT` | Deployment rolls back if ingestion fails |
+
+## Props Reference
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `schemaPath` | Yes | Path to your `.bprint` schema file |
+| `table` | Yes | Your DynamoDB table |
+| `appId` | Yes | Your Chaim application ID |
+| `credentials` | Yes | API credentials |
+| `failureMode` | No | `BEST_EFFORT` (default) or `STRICT` |
+
+## Coming Soon
+
+- Aurora PostgreSQL/MySQL
+- RDS instances  
+- S3 buckets
+- DocumentDB
 
 ## License
 
