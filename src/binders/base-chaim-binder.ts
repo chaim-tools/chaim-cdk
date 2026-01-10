@@ -5,12 +5,17 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import * as crypto from 'crypto';
 
-import { SchemaData, validateSchema } from '@chaim-tools/chaim-bprint-spec';
+import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { BaseBinderProps, validateCredentials } from '../types/base-binder-props';
 import { DataStoreMetadata } from '../types/data-store-metadata';
-import { SnapshotPayload, StackContext } from '../types/snapshot-payload';
+import {
+  PreviewSnapshotPayload,
+  RegisteredSnapshotPayload,
+  StackContext,
+} from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
 import { FailureMode } from '../types/failure-mode';
+import { writePreviewSnapshot } from '../services/snapshot-paths';
 
 /** Default API endpoint - can be overridden via CDK context for maintainers */
 const DEFAULT_API_BASE_URL = 'https://ingest.chaim.co';
@@ -24,6 +29,7 @@ const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
  * Provides shared infrastructure:
  * - Schema loading and validation
  * - Snapshot payload construction
+ * - Preview snapshot writing during CDK synth
  * - Lambda-backed custom resource for S3 presigned upload + snapshot-ref
  *
  * Subclasses implement `extractMetadata()` for store-specific metadata extraction.
@@ -37,6 +43,9 @@ export abstract class BaseChaimBinder extends Construct {
 
   /** Unique event ID for this deployment */
   public readonly eventId: string;
+
+  /** Path to the preview snapshot file written during synth */
+  public readonly previewSnapshotPath: string;
 
   /** Base props (credentials, appId, etc.) */
   protected readonly baseProps: BaseBinderProps;
@@ -58,11 +67,15 @@ export abstract class BaseChaimBinder extends Construct {
     // Extract data store metadata (implemented by subclass)
     this.dataStoreMetadata = this.extractMetadata();
 
-    // Build snapshot payload
-    const snapshot = this.buildSnapshot();
+    // Build and write preview snapshot (during CDK synth)
+    const previewSnapshot = this.buildPreviewSnapshot();
+    this.previewSnapshotPath = this.writePreviewSnapshotToDisk(previewSnapshot);
+
+    // Build registered snapshot for deploy-time ingestion
+    const registeredSnapshot = this.buildRegisteredSnapshot();
 
     // Deploy Lambda-backed custom resource for ingestion
-    this.deployIngestionResources(snapshot);
+    this.deployIngestionResources(registeredSnapshot);
   }
 
   /**
@@ -71,25 +84,52 @@ export abstract class BaseChaimBinder extends Construct {
   protected abstract extractMetadata(): DataStoreMetadata;
 
   /**
-   * Build the complete snapshot payload for Chaim ingestion.
+   * Build the base snapshot context (shared between preview and registered).
    */
-  private buildSnapshot(): SnapshotPayload {
+  private buildStackContext(): StackContext {
     const stack = cdk.Stack.of(this);
-
-    const context: StackContext = {
+    return {
       account: stack.account,
       region: stack.region,
       stackId: stack.stackId,
       stackName: stack.stackName,
     };
+  }
+
+  /**
+   * Build a preview snapshot payload for CDK synth.
+   * Does not include eventId or contentHash.
+   */
+  private buildPreviewSnapshot(): PreviewSnapshotPayload {
+    const capturedAt = new Date().toISOString();
+
+    return {
+      snapshotMode: 'PREVIEW',
+      appId: this.baseProps.appId,
+      schema: this.schemaData,
+      dataStore: this.dataStoreMetadata,
+      context: this.buildStackContext(),
+      capturedAt,
+      timestamp: capturedAt, // For backwards compatibility
+    };
+  }
+
+  /**
+   * Build a registered snapshot payload for deploy-time ingestion.
+   * Includes eventId and contentHash.
+   */
+  private buildRegisteredSnapshot(): RegisteredSnapshotPayload {
+    const capturedAt = new Date().toISOString();
 
     const payloadWithoutHash = {
+      snapshotMode: 'REGISTERED' as const,
       eventId: this.eventId,
       appId: this.baseProps.appId,
       schema: this.schemaData,
       dataStore: this.dataStoreMetadata,
-      context,
-      timestamp: new Date().toISOString(),
+      context: this.buildStackContext(),
+      capturedAt,
+      timestamp: capturedAt, // For backwards compatibility
     };
 
     // Compute content hash
@@ -99,6 +139,15 @@ export abstract class BaseChaimBinder extends Construct {
       ...payloadWithoutHash,
       contentHash,
     };
+  }
+
+  /**
+   * Write the preview snapshot to disk during CDK synth.
+   * @returns The path where the snapshot was written
+   */
+  private writePreviewSnapshotToDisk(snapshot: PreviewSnapshotPayload): string {
+    const stack = cdk.Stack.of(this);
+    return writePreviewSnapshot(stack.stackName, snapshot);
   }
 
   /**
@@ -113,7 +162,7 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Deploy Lambda function and custom resource for ingestion.
    */
-  private deployIngestionResources(snapshot: SnapshotPayload): void {
+  private deployIngestionResources(snapshot: RegisteredSnapshotPayload): void {
     const handler = this.createIngestionLambda(snapshot);
     this.createCustomResource(handler, snapshot);
   }
@@ -121,7 +170,7 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Create Lambda function for ingestion workflow.
    */
-  private createIngestionLambda(snapshot: SnapshotPayload): lambda.Function {
+  private createIngestionLambda(snapshot: RegisteredSnapshotPayload): lambda.Function {
     const handler = new lambda.Function(this, 'IngestionHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
@@ -157,7 +206,7 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Build Lambda environment variables.
    */
-  private buildLambdaEnvironment(snapshot: SnapshotPayload): Record<string, string> {
+  private buildLambdaEnvironment(snapshot: RegisteredSnapshotPayload): Record<string, string> {
     const { credentials } = this.baseProps;
 
     // Allow maintainer override via CDK context, otherwise use default
@@ -184,7 +233,7 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Create CloudFormation custom resource.
    */
-  private createCustomResource(handler: lambda.Function, snapshot: SnapshotPayload): void {
+  private createCustomResource(handler: lambda.Function, snapshot: RegisteredSnapshotPayload): void {
     const provider = new cr.Provider(this, 'IngestionProvider', {
       onEventHandler: handler,
     });
@@ -194,7 +243,7 @@ export abstract class BaseChaimBinder extends Construct {
       properties: {
         EventId: this.eventId,
         ContentHash: snapshot.contentHash,
-        Timestamp: snapshot.timestamp,
+        Timestamp: snapshot.capturedAt,
       },
     });
   }
@@ -243,7 +292,7 @@ exports.handler = async (event, context) => {
           EventId: snapshotPayload.eventId,
           IngestStatus: 'SUCCESS',
           ContentHash: snapshotPayload.contentHash,
-          Timestamp: snapshotPayload.timestamp,
+          Timestamp: snapshotPayload.capturedAt || snapshotPayload.timestamp,
         },
       };
     }
@@ -313,7 +362,7 @@ exports.handler = async (event, context) => {
         EventId: snapshotPayload.eventId,
         IngestStatus: 'SUCCESS',
         ContentHash: snapshotPayload.contentHash,
-        Timestamp: snapshotPayload.timestamp,
+        Timestamp: snapshotPayload.capturedAt || snapshotPayload.timestamp,
       },
     };
     
@@ -331,7 +380,7 @@ exports.handler = async (event, context) => {
         EventId: snapshotPayload.eventId,
         IngestStatus: 'FAILED',
         ContentHash: snapshotPayload.contentHash,
-        Timestamp: snapshotPayload.timestamp,
+        Timestamp: snapshotPayload.capturedAt || snapshotPayload.timestamp,
         Error: error.message,
       },
     };

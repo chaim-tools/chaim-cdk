@@ -29,13 +29,30 @@ export {
 
 export {
   SnapshotPayload,
+  SnapshotMode,
   StackContext,
+  BaseSnapshotPayload,
+  PreviewSnapshotPayload,
+  RegisteredSnapshotPayload,
   IngestResponse,
   CustomResourceResponseData,
+  isPreviewSnapshot,
+  isRegisteredSnapshot,
 } from './types/snapshot-payload';
 
 // Service exports
 export { SchemaService } from './services/schema-service';
+export {
+  getBaseSnapshotDir,
+  getModeDir,
+  getPreviewSnapshotPath,
+  getRegisteredSnapshotPath,
+  ensureDirectoryExists,
+  writeSnapshot,
+  writePreviewSnapshot,
+  writeRegisteredSnapshot,
+  SnapshotMode as SnapshotPathMode,
+} from './services/snapshot-paths';
 export {
   IngestionService,
   IngestionConfig,

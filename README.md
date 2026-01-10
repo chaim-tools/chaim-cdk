@@ -2,7 +2,7 @@
 
 **Add data governance to your DynamoDB tables in 3 lines of CDK.**
 
-Chaim captures your schema intent at deploy time and publishes it to the Chaim platform. The CDK construct has no runtime overhead and requires no agents.
+Chaim captures your schema intent at synth or deploy time and publishes it to the Chaim platform. The CDK construct has no runtime overhead and requires no agents.
 
 ## Installation
 
@@ -33,6 +33,45 @@ new ChaimDynamoDBBinder(this, 'UsersSchema', {
 
 Your table deploys exactly as before. Chaim captures the schema and table metadata automatically.
 
+## Two Workflows
+
+Chaim supports two workflows depending on your needs:
+
+### Preview Workflow (Development)
+
+Generate code without deploying - perfect for rapid iteration:
+
+```bash
+cdk synth                           # Creates preview snapshot
+chaim generate --mode preview       # Generates SDK from snapshot
+```
+
+### Full Workflow (Production)
+
+Deploy and track schema changes in Chaim SaaS:
+
+```bash
+cdk deploy                          # Creates registered snapshot + publishes to Chaim
+chaim generate                      # Generates SDK (auto-selects registered)
+```
+
+## What Happens When
+
+### During `cdk synth`
+
+1. **Validate** - Your `.bprint` schema is validated
+2. **Capture** - Table metadata is extracted (keys, indexes, TTL, streams)
+3. **Write** - Preview snapshot saved to `cdk.out/chaim/snapshots/preview/`
+
+### During `cdk deploy`
+
+All synth steps, plus:
+
+4. **Upload** - Schema + metadata is securely uploaded to Chaim SaaS
+5. **Track** - Registered snapshot saved to `cdk.out/chaim/snapshots/registered/`
+
+The CDK construct runs only at synth/deploy time - no runtime overhead.
+
 ## Credentials Setup
 
 Store your Chaim API credentials in AWS Secrets Manager:
@@ -57,19 +96,6 @@ credentials: ChaimCredentials.fromApiKeys(
   process.env.CHAIM_API_SECRET!
 )
 ```
-
-## What Happens at Deploy
-
-When you run `cdk deploy`:
-
-1. **Validate** - Your `.bprint` schema is validated
-2. **Capture** - Table metadata is extracted (keys, indexes, TTL, streams), along with high-level AWS account details for context
-3. **Upload** - Schema + metadata is securely uploaded to Chaim
-4. **Done** - Your stack deploys normally
-
-The CDK construct runs only at deploy time - no runtime overhead in your infrastructure.
-
-> **Note**: While the CDK has no runtime impact, Chaim's full workflow includes using the `chaim-cli` to generate type-safe DTOs and mapper clients for your application. These generated artifacts enforce that your application's data structures match the schema definition.
 
 ## Failure Handling
 
@@ -103,6 +129,22 @@ new ChaimDynamoDBBinder(this, 'UsersSchema', {
 | `appId` | Yes | Your Chaim application ID |
 | `credentials` | Yes | API credentials |
 | `failureMode` | No | `BEST_EFFORT` (default) or `STRICT` |
+
+## Snapshot Locations
+
+All snapshots are written to `cdk.out/chaim/snapshots/`:
+
+| Mode | Path | When Created | Purpose |
+|------|------|--------------|---------|
+| Preview | `preview/<stackName>.json` | `cdk synth` | Local development, code generation |
+| Registered | `registered/<stackName>-<eventId>.json` | `cdk deploy` | Production tracking, audit trail |
+
+## Related Packages
+
+| Package | Purpose |
+|---------|---------|
+| [chaim-bprint-spec](https://github.com/chaim-tools/chaim-bprint-spec) | Schema format specification (`.bprint` files) |
+| [chaim-cli](https://github.com/chaim-tools/chaim-cli) | Code generation from snapshots |
 
 ## Coming Soon
 

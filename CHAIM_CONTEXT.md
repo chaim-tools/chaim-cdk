@@ -10,18 +10,37 @@
 
 ## Project Overview
 
-The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for binding data stores to Chaim schemas. It publishes schema and data store metadata to the **Chaim SaaS platform** via S3 presigned upload.
+The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for binding data stores to Chaim schemas. It captures schema and metadata at **synth time** (preview) and publishes to the **Chaim SaaS platform** at **deploy time** (registered).
 
-> Mental model: chaim-cdk captures *declared intent at deploy time*, publishes it once, and is never part of the application runtime path.
+> **Mental model (dual-mode)**:
+> - **Preview mode** (`cdk synth`): Captures declared intent locally for development and code generation without requiring deployment
+> - **Registered mode** (`cdk deploy`): Captures and publishes intent to Chaim SaaS for production tracking and audit
+> 
+> Both modes produce snapshot files. The CDK construct is never part of the application runtime path.
 
 ### Key Capabilities
 
 - **ChaimDynamoDBBinder**: CDK construct for binding DynamoDB tables to `.bprint` schemas
+- **Dual-Mode Snapshots**: Preview snapshots at synth-time, registered snapshots at deploy-time
 - **Extensible Architecture**: Abstract base class supports future data store types (e.g., RDS, Object)
 - **Large Payload Support**: S3 presigned upload for arbitrarily large schemas
 - **Schema Validation**: Validates `.bprint` files using `@chaim-tools/chaim-bprint-spec`
-- **Metadata Capture**: Captures schema, resource (i.e., DynamoDB) configuration (keys, indexes, TTL, streams, encryption), and cloud (i.e., AWS) account details
+- **Metadata Capture**: Captures schema, resource configuration (keys, indexes, TTL, streams, encryption), and cloud account details
 - **Secure Ingestion**: HMAC-signed API requests with credential rotation support
+
+---
+
+## Related Packages
+
+| Package | Relationship | Purpose |
+|---------|-------------|---------|
+| `@chaim-tools/chaim-bprint-spec` | **Dependency** | Schema format definition, validation, TypeScript types |
+| `chaim-cli` | **Consumer** | Reads snapshot files from `cdk.out/chaim/snapshots/` for SDK code generation |
+
+**Data flow**:
+```
+.bprint file → chaim-cdk (validates + captures) → snapshot files → chaim-cli (generates SDK)
+```
 
 ## Scope
 
@@ -64,7 +83,8 @@ chaim-cdk/
 │   │   └── snapshot-payload.ts       # Ingestion payload structure
 │   └── services/
 │       ├── schema-service.ts         # Schema loading & validation
-│       └── ingestion-service.ts      # API configuration & utilities
+│       ├── ingestion-service.ts      # API configuration & utilities
+│       └── snapshot-paths.ts         # Snapshot file path utilities
 ├── packages/
 │   ├── cdk-lib/                      # Published npm package
 │   └── examples/                     # Example applications
@@ -82,18 +102,37 @@ chaim-cdk/
 
 ```
 BaseChaimBinder (abstract)
-├── extractMetadata()      # Abstract - implemented by subclasses
-├── buildSnapshot()        # Shared - builds ingestion payload
-├── deployIngestionResources()  # Shared - Lambda + custom resource
+├── extractMetadata()           # Abstract - implemented by subclasses
+├── buildPreviewSnapshot()      # Synth-time: builds preview payload (no eventId/contentHash)
+├── buildRegisteredSnapshot()   # Deploy-time: builds registered payload (includes eventId/contentHash)
+├── writePreviewSnapshotToDisk()# Writes to cdk.out/chaim/snapshots/preview/
+├── deployIngestionResources()  # Shared - Lambda + custom resource for deploy-time
 │
 └── ChaimDynamoDBBinder (concrete)
-    └── extractMetadata()  # DynamoDB-specific metadata extraction
+    └── extractMetadata()       # DynamoDB-specific metadata extraction
 
 Future extensions (not yet implemented):
 ├── ChaimAuroraBinder
 ├── ChaimRDSBinder
 └── ChaimDocumentDBBinder
 ```
+
+### Snapshot Creation Flow
+
+**During `cdk synth` (constructor execution):**
+1. Validate credentials
+2. Generate eventId (UUID v4)
+3. Load and validate `.bprint` schema
+4. Extract data store metadata (subclass)
+5. **Write preview snapshot** → `cdk.out/chaim/snapshots/preview/<stackName>.json`
+6. Build registered snapshot (for Lambda env)
+7. Deploy ingestion Lambda + custom resource
+
+**During `cdk deploy` (Lambda execution):**
+1. Lambda reads registered snapshot from env
+2. Request presigned upload URL
+3. Upload snapshot to S3
+4. Commit snapshot reference to Chaim SaaS
 
 ---
 
@@ -238,6 +277,46 @@ The chaim-cdk package does NOT:
 
 ---
 
+## Snapshot Locations
+
+All snapshots are written to a standardized directory structure under `cdk.out/chaim/snapshots/`:
+
+```
+cdk.out/chaim/snapshots/
+├── preview/                    # Synth-time snapshots
+│   └── <stackName>.json       # e.g., MyStack.json
+└── registered/                 # Deploy-time snapshots  
+    └── <stackName>-<eventId>.json  # e.g., MyStack-550e8400-e29b-41d4-a716-446655440000.json
+```
+
+### Snapshot Modes
+
+| Mode | When Created | Contains | Purpose |
+|------|--------------|----------|---------|
+| `PREVIEW` | `cdk synth` | schema, dataStore, context, capturedAt | Local development, code generation without deploy |
+| `REGISTERED` | `cdk deploy` | All preview fields + eventId, contentHash | Production tracking, audit trail |
+
+### File Naming
+
+- **Preview**: `preview/<stackName>.json` (single file, overwritten on each synth)
+- **Registered**: `registered/<stackName>-<eventId>.json` (new file per deploy, UUID v4 suffix)
+
+### Usage with chaim-cli
+
+The CLI reads snapshots from this directory to generate SDKs:
+
+```bash
+# Preview workflow (no deploy needed)
+cdk synth
+chaim generate --mode preview
+
+# Registered workflow (after deploy)
+cdk deploy
+chaim generate --mode registered
+```
+
+---
+
 ## DynamoDB Metadata Captured
 
 | Field | Description |
@@ -274,7 +353,28 @@ export { FailureMode } from './types/failure-mode';
 // Types
 export { BaseBinderProps } from './types/base-binder-props';
 export { DynamoDBMetadata, DataStoreMetadata } from './types/data-store-metadata';
-export { SnapshotPayload, StackContext } from './types/snapshot-payload';
+
+// Snapshot types (dual-mode support)
+export {
+  SnapshotPayload,           // Union type: PreviewSnapshotPayload | RegisteredSnapshotPayload
+  SnapshotMode,              // 'PREVIEW' | 'REGISTERED'
+  StackContext,
+  BaseSnapshotPayload,       // Shared fields
+  PreviewSnapshotPayload,    // Synth-time payload (no eventId/contentHash)
+  RegisteredSnapshotPayload, // Deploy-time payload (includes eventId/contentHash)
+  isPreviewSnapshot,         // Type guard
+  isRegisteredSnapshot,      // Type guard
+} from './types/snapshot-payload';
+
+// Snapshot path utilities
+export {
+  getBaseSnapshotDir,        // Returns cdk.out/chaim/snapshots
+  getModeDir,                // Returns base/preview or base/registered
+  getPreviewSnapshotPath,    // Returns path for preview snapshot
+  getRegisteredSnapshotPath, // Returns path for registered snapshot
+  writePreviewSnapshot,      // Writes preview snapshot to disk
+  writeRegisteredSnapshot,   // Writes registered snapshot to disk
+} from './services/snapshot-paths';
 
 // Services
 export { SchemaService } from './services/schema-service';
@@ -309,6 +409,7 @@ export { SchemaData, Entity, Field, PrimaryKey } from '@chaim-tools/chaim-bprint
 | `src/types/snapshot-payload.ts` | Ingestion payload structure |
 | `src/services/schema-service.ts` | Schema loading and validation |
 | `src/services/ingestion-service.ts` | API configuration and utilities |
+| `src/services/snapshot-paths.ts` | Snapshot file path utilities |
 
 ---
 
@@ -325,6 +426,27 @@ import { validateSchema, SchemaData } from '@chaim-tools/chaim-bprint-spec';
 
 const schemaData: SchemaData = validateSchema(rawSchema);
 ```
+
+---
+
+## Integration with chaim-cli
+
+The chaim-cli consumes snapshot files produced by this package:
+
+1. **Snapshot Discovery**: CLI looks in `cdk.out/chaim/snapshots/{preview|registered}/`
+2. **Mode Selection**: CLI supports `--mode preview|registered|auto`
+3. **Code Generation**: CLI reads schema + dataStore metadata from snapshots to generate SDKs
+
+**Contract**: Snapshots must include:
+- `snapshotMode`: `'PREVIEW'` or `'REGISTERED'`
+- `capturedAt`: ISO 8601 timestamp
+- `schema`: Validated `.bprint` schema data
+- `dataStore`: Data store metadata (DynamoDB config, etc.)
+- `context`: Stack context (account, region, stackName, stackId)
+
+**Registered-only fields**:
+- `eventId`: UUID v4
+- `contentHash`: SHA-256 of payload
 
 ---
 

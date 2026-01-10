@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
 
@@ -22,6 +24,16 @@ vi.mock('../../src/services/schema-service', () => ({
   },
 }));
 
+// Mock fs for snapshot writing
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof fs>('fs');
+  return {
+    ...actual,
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+  };
+});
+
 describe('ChaimDynamoDBBinder', () => {
   let app: cdk.App;
   let stack: cdk.Stack;
@@ -38,6 +50,10 @@ describe('ChaimDynamoDBBinder', () => {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('constructor', () => {
@@ -160,6 +176,114 @@ describe('ChaimDynamoDBBinder', () => {
       });
 
       expect(binder).toBeDefined();
+    });
+  });
+
+  describe('preview snapshot writing', () => {
+    it('should write preview snapshot during construction', () => {
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      // Verify fs.writeFileSync was called
+      expect(fs.writeFileSync).toHaveBeenCalled();
+
+      // Verify the path contains preview directory
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      expect(writeCall[0]).toContain('preview');
+      expect(writeCall[0]).toContain('TestStack.json');
+    });
+
+    it('should expose previewSnapshotPath property', () => {
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      expect(binder.previewSnapshotPath).toBeDefined();
+      expect(binder.previewSnapshotPath).toContain('preview');
+      expect(binder.previewSnapshotPath).toContain('TestStack.json');
+    });
+
+    it('should write snapshot with PREVIEW snapshotMode', () => {
+      new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      const writtenContent = JSON.parse(writeCall[1]);
+
+      expect(writtenContent.snapshotMode).toBe('PREVIEW');
+    });
+
+    it('should include capturedAt in preview snapshot', () => {
+      new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      const writtenContent = JSON.parse(writeCall[1]);
+
+      expect(writtenContent.capturedAt).toBeDefined();
+      // Should be ISO 8601 format
+      expect(new Date(writtenContent.capturedAt).toISOString()).toBe(writtenContent.capturedAt);
+    });
+
+    it('should include schema and dataStore in preview snapshot', () => {
+      new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      const writtenContent = JSON.parse(writeCall[1]);
+
+      expect(writtenContent.schema).toBeDefined();
+      expect(writtenContent.dataStore).toBeDefined();
+      expect(writtenContent.dataStore.type).toBe('dynamodb');
+    });
+
+    it('should include stack context in preview snapshot', () => {
+      new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      const writtenContent = JSON.parse(writeCall[1]);
+
+      expect(writtenContent.context).toBeDefined();
+      expect(writtenContent.context.stackName).toBe('TestStack');
+    });
+
+    it('should NOT include eventId or contentHash in preview snapshot', () => {
+      new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        appId: 'test-app',
+        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+      });
+
+      const writeCall = (fs.writeFileSync as any).mock.calls[0];
+      const writtenContent = JSON.parse(writeCall[1]);
+
+      expect(writtenContent.eventId).toBeUndefined();
+      expect(writtenContent.contentHash).toBeUndefined();
     });
   });
 });
