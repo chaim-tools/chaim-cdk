@@ -27,12 +27,35 @@ export {
   DataStoreMetadata,
 } from './types/data-store-metadata';
 
+// Snapshot payload types
 export {
-  SnapshotPayload,
+  LocalSnapshotPayload,
   StackContext,
   IngestResponse,
   CustomResourceResponseData,
+  // Legacy type (deprecated)
+  SnapshotPayload,
 } from './types/snapshot-payload';
+
+// Ingest contract types
+export {
+  SnapshotAction,
+  UploadUrlRequest,
+  UploadUrlResponse,
+  SnapshotRefUpsertRequest,
+  SnapshotRefDeleteRequest,
+  SnapshotRefRequest,
+  SnapshotRefResponse,
+  CloudFormationRequestType,
+} from './types/ingest-contract';
+
+// Config exports
+export {
+  DEFAULT_CHAIM_API_BASE_URL,
+  CHAIM_ENDPOINTS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_SNAPSHOT_BYTES,
+} from './config/chaim-endpoints';
 
 // Service exports
 export { SchemaService } from './services/schema-service';

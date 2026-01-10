@@ -194,15 +194,14 @@ export async function verifySchemaDataMatchesFile(
 }
 
 /**
- * Verifies that the Mode output is correct.
+ * Verifies that the ingestion status output is successful.
  * 
- * @param modeOutput - Mode value from CloudFormation output
- * @param expectedMode - Expected mode ('oss' or 'saas')
- * @returns True if mode matches
+ * @param statusOutput - IngestStatus value from CloudFormation output
+ * @returns True if status is SUCCESS
  */
-export function verifyModeOutput(modeOutput: string, expectedMode: 'oss' | 'saas'): boolean {
-  if (modeOutput !== expectedMode) {
-    throw new Error(`Mode mismatch: expected ${expectedMode}, got ${modeOutput}`);
+export function verifyIngestStatus(statusOutput: string): boolean {
+  if (statusOutput !== 'SUCCESS') {
+    throw new Error(`Ingestion status is not SUCCESS: got ${statusOutput}`);
   }
   return true;
 }

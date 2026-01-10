@@ -10,23 +10,26 @@
 
 ## Project Overview
 
-The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for binding data stores to Chaim schemas. It captures schema and metadata at **synth time** (preview) and publishes to the **Chaim SaaS platform** at **deploy time** (registered).
+The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for binding data stores to Chaim schemas. It captures schema and metadata at **synth time** (LOCAL snapshot) and publishes to the **Chaim SaaS platform** at **deploy time** (PUBLISHED).
 
-> **Mental model (dual-mode)**:
-> - **Preview mode** (`cdk synth`): Captures declared intent locally for development and code generation without requiring deployment
-> - **Registered mode** (`cdk deploy`): Captures and publishes intent to Chaim SaaS for production tracking and audit
+> **Mental model (LOCAL + PUBLISHED)**:
+> - **LOCAL snapshot**: Written during synthesis (runs for both `cdk synth` and `cdk deploy`). Stored in OS cache. Used by CLI for code generation.
+> - **PUBLISHED snapshot**: Sent to Chaim SaaS at deploy-time by the Lambda custom resource. Contains `eventId` and `contentHash` for audit/tracking.
 > 
-> Both modes produce snapshot files. The CDK construct is never part of the application runtime path.
+> The CDK construct is never part of the application runtime path.
 
 ### Key Capabilities
 
 - **ChaimDynamoDBBinder**: CDK construct for binding DynamoDB tables to `.bprint` schemas
-- **Dual-Mode Snapshots**: Preview snapshots at synth-time, registered snapshots at deploy-time
+- **LOCAL Snapshots**: Written to OS cache during synth for CLI consumption
+- **PUBLISHED Snapshots**: Sent to Chaim SaaS at deploy-time via Lambda custom resource
 - **Extensible Architecture**: Abstract base class supports future data store types (e.g., RDS, Object)
-- **Large Payload Support**: S3 presigned upload for arbitrarily large schemas
+- **Large Payload Support**: S3 presigned upload avoids API Gateway payload limits
 - **Schema Validation**: Validates `.bprint` files using `@chaim-tools/chaim-bprint-spec`
 - **Metadata Capture**: Captures schema, resource configuration (keys, indexes, TTL, streams, encryption), and cloud account details
-- **Secure Ingestion**: HMAC-signed API requests with credential rotation support
+- **Secure Ingestion**: API key authentication over HTTPS; credentials read from Secrets Manager at deploy time
+
+> **Implementation status:** DynamoDB binder is production-ready. Aurora/RDS/DocumentDB binders are planned (see Coming Soon).
 
 ---
 
@@ -35,12 +38,71 @@ The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for bindin
 | Package | Relationship | Purpose |
 |---------|-------------|---------|
 | `@chaim-tools/chaim-bprint-spec` | **Dependency** | Schema format definition, validation, TypeScript types |
-| `chaim-cli` | **Consumer** | Reads snapshot files from `cdk.out/chaim/snapshots/` for SDK code generation |
+| `chaim-cli` | **Consumer** | Reads LOCAL snapshot files from OS cache for SDK code generation |
 
 **Data flow**:
+
+```mermaid
+flowchart TD
+    %% Inputs
+    A[.bprint schema<br/>source of truth]
+
+    %% Synth time
+    subgraph Synth[CDK Synthesis Phase]
+        A --> B[chaim-cdk<br/>validate schema<br/>extract metadata]
+        B --> C[Build LOCAL snapshot<br/>schema and resource metadata]
+        C --> D[Write LOCAL snapshot<br/>OS cache path]
+        C --> E[Write snapshot.json<br/>CDK asset directory<br/>cdk.out/chaim/assets]
+    end
+
+    %% CLI usage
+    subgraph CLI[Developer Workflow]
+        D --> F[chaim-cli<br/>discover snapshots]
+        F --> G[Generate SDK<br/>DTOs and mappers]
+    end
+
+    %% Deploy time - CFN triggers Lambda
+    subgraph Deploy[CDK Deploy Phase]
+        E --> H[Custom Resource Lambda<br/>triggered by CloudFormation]
+        H --> CFN{CFN Request Type?}
+    end
+
+    %% CREATE/UPDATE path (identical flow, both use UPSERT)
+    subgraph UpsertFlow[CREATE / UPDATE Flow]
+        CFN -->|Create or Update| U1[Read full snapshot.json<br/>from bundled asset]
+        U1 --> U2[Generate eventId<br/>compute contentHash]
+        U2 --> U3[POST /ingest/upload-url<br/>get presigned S3 URL]
+        U3 --> U4[PUT snapshot bytes<br/>to presigned URL]
+        U4 --> U5[POST /ingest/snapshot-ref<br/>action: UPSERT]
+    end
+
+    %% DELETE path
+    subgraph DeleteFlow[DELETE Flow]
+        CFN -->|Delete| D1[Read minimal metadata<br/>from bundled asset]
+        D1 --> D2[Generate eventId<br/>for delete event]
+        D2 --> D3[POST /ingest/snapshot-ref<br/>action: DELETE]
+    end
+
+    %% SaaS interactions
+    subgraph SaaS[Chaim SaaS Platform]
+        U3 --> S1[S3 Snapshot storage]
+        U4 --> S1
+        U5 --> S2[Binding registry<br/>audit and lineage]
+        D3 --> S2
+    end
+
+    %% CFN responses
+    U5 --> R[Respond to CloudFormation<br/>based on FailureMode]
+    D3 --> R
 ```
-.bprint file → chaim-cdk (validates + captures) → snapshot files → chaim-cli (generates SDK)
-```
+
+**Data Flow Summary by Operation:**
+
+| Operation | S3 Upload | API Calls | Action |
+|-----------|-----------|-----------|--------|
+| **CREATE / UPDATE** | ✅ Full snapshot | `/ingest/upload-url` → `/ingest/snapshot-ref` | `UPSERT` |
+| **DELETE** | ❌ No upload | `/ingest/snapshot-ref` only | `DELETE` |
+
 
 ## Scope
 
@@ -49,9 +111,10 @@ This repository (`chaim-cdk`) is the **AWS CDK (CloudFormation) implementation**
 - It is intentionally **AWS-specific** (DynamoDB, CloudFormation Custom Resource, Secrets Manager, S3 presigned URLs).
 - Other cloud providers and on-prem deployment integrations will live in **separate repositories**.
 - All provider repos must remain **contract-compatible** with the Chaim ingest plane:
-  - upload-url → PUT snapshot bytes → snapshot-ref commit
-  - eventId idempotency
-  - authenticated requests (credentials + signing)
+  - POST /ingest/upload-url → PUT snapshot bytes → POST /ingest/snapshot-ref
+  - resourceId + contentHash deduplication
+  - authenticated requests (API key credentials)
+
 ---
 
 ## Technology Stack
@@ -70,42 +133,55 @@ This repository (`chaim-cdk`) is the **AWS CDK (CloudFormation) implementation**
 
 ## Repository Structure
 
-```
-chaim-cdk/
-├── src/
-│   ├── index.ts                      # Package exports
-│   ├── binders/                      # Data store binder constructs
-│   │   ├── base-chaim-binder.ts      # Abstract base class
-│   │   └── chaim-dynamodb-binder.ts  # DynamoDB implementation
-│   ├── types/                        # TypeScript interfaces
-│   │   ├── base-binder-props.ts      # Shared props (credentials, appId)
-│   │   ├── data-store-metadata.ts    # Metadata types per data store
-│   │   └── snapshot-payload.ts       # Ingestion payload structure
-│   └── services/
-│       ├── schema-service.ts         # Schema loading & validation
-│       ├── ingestion-service.ts      # API configuration & utilities
-│       └── snapshot-paths.ts         # Snapshot file path utilities
-├── packages/
-│   ├── cdk-lib/                      # Published npm package
-│   └── examples/                     # Example applications
-├── example/
-│   ├── example-stack.ts              # Usage examples
-│   └── schemas/                      # Sample .bprint files
-└── test/                             # Unit & integration tests
-```
+| Directory | Purpose |
+|-----------|---------|
+| `src/binders/` | CDK constructs - base class and data store implementations |
+| `src/lambda-handler/` | Canonical Lambda handler for deploy-time ingestion |
+| `src/services/` | Utilities for schema loading, caching, and path resolution |
+| `src/types/` | TypeScript interfaces and type definitions |
+| `src/config/` | API endpoints and configuration constants |
+| `packages/cdk-lib/` | Published npm package |
+| `example/` | Usage examples and sample `.bprint` schemas |
+| `test/` | Unit and integration tests |
+
+> See **Key Files Reference** section below for specific file details.
 
 ---
 
 ## Architecture
+
+### Lambda Handler (Canonical Implementation)
+
+The ingestion Lambda handler is located at `src/lambda-handler/handler.js`. This is the **single source of truth** for the ingestion workflow.
+
+**Key characteristics:**
+- Written in JavaScript (no compilation during synth)
+- Reads `./snapshot.json` from bundled asset directory
+- Generates `eventId` (UUID v4) at runtime
+- Computes `contentHash` (SHA-256 of snapshot bytes)
+- Implements presigned upload flow
+
+**Ingestion Flow (Create/Update):**
+1. Read snapshot.json from bundled asset
+2. Generate eventId using `crypto.randomUUID()`
+3. Compute contentHash as SHA-256 of snapshot bytes
+4. POST `/ingest/upload-url` → get presigned S3 URL
+5. PUT snapshot bytes to presigned URL
+6. POST `/ingest/snapshot-ref` with action: 'UPSERT'
+
+**Ingestion Flow (Delete):**
+1. Read minimal metadata from snapshot.json
+2. Generate eventId using `crypto.randomUUID()`
+3. POST `/ingest/snapshot-ref` with action: 'DELETE'
 
 ### Extensible Base Class Design
 
 ```
 BaseChaimBinder (abstract)
 ├── extractMetadata()           # Abstract - implemented by subclasses
-├── buildPreviewSnapshot()      # Synth-time: builds preview payload (no eventId/contentHash)
-├── buildRegisteredSnapshot()   # Deploy-time: builds registered payload (includes eventId/contentHash)
-├── writePreviewSnapshotToDisk()# Writes to cdk.out/chaim/snapshots/preview/
+├── buildLocalSnapshot()        # Synth-time: builds LOCAL payload for CLI
+├── writeLocalSnapshotToDisk()  # Writes to OS cache (~/.chaim/cache/snapshots/)
+├── writeSnapshotAsset()        # Writes to cdk.out/chaim/assets/ for Lambda bundling
 ├── deployIngestionResources()  # Shared - Lambda + custom resource for deploy-time
 │
 └── ChaimDynamoDBBinder (concrete)
@@ -117,22 +193,95 @@ Future extensions (not yet implemented):
 └── ChaimDocumentDBBinder
 ```
 
+### Credential Security Model
+
+> **Synth never reads secret values.** The Secret ARN/name is captured as a reference only. The deploy-time Lambda reads Secrets Manager and signs outbound API requests. No credentials are logged or included in synthesized templates/assets.
+
+| Phase | Credential Handling |
+|-------|---------------------|
+| **Synth** | Captures Secret ARN reference only; no secret values read |
+| **Deploy** | Lambda reads Secrets Manager, signs API requests |
+
 ### Snapshot Creation Flow
 
-**During `cdk synth` (constructor execution):**
-1. Validate credentials
-2. Generate eventId (UUID v4)
-3. Load and validate `.bprint` schema
-4. Extract data store metadata (subclass)
-5. **Write preview snapshot** → `cdk.out/chaim/snapshots/preview/<stackName>.json`
-6. Build registered snapshot (for Lambda env)
-7. Deploy ingestion Lambda + custom resource
+**During `cdk synth` or `cdk deploy` (constructor execution):**
+1. Validate credential reference (ARN/name format, not secret value)
+2. Load and validate `.bprint` schema
+3. Extract data store metadata (subclass)
+4. Compute stable resource key (physical name > logical ID > construct path)
+5. Generate resourceId with collision handling: `{resourceName}__{entityName}[__N]`
+6. **Write LOCAL snapshot** → OS cache (OVERWRITE on each synth)
+7. **Write snapshot.json + handler.js** → `cdk.out/chaim/assets/{stackName}/{resourceId}/`
+8. Deploy ingestion Lambda + custom resource (uses asset directory)
 
 **During `cdk deploy` (Lambda execution):**
-1. Lambda reads registered snapshot from env
-2. Request presigned upload URL
-3. Upload snapshot to S3
-4. Commit snapshot reference to Chaim SaaS
+1. Lambda reads snapshot from bundled `./snapshot.json`
+2. Generate `eventId` (UUID v4) at runtime
+3. Compute `contentHash` = SHA-256(snapshot bytes)
+4. POST /ingest/upload-url (get presigned URL)
+5. PUT snapshot bytes to presigned URL
+6. POST /ingest/snapshot-ref (commit)
+7. Respond to CloudFormation based on FailureMode
+
+---
+
+## API Endpoints Configuration
+
+### Default Base URL
+
+The default Chaim API base URL is defined in `src/config/chaim-endpoints.ts`:
+
+```typescript
+export const DEFAULT_CHAIM_API_BASE_URL = 'https://api.chaim.co';
+```
+
+**Override via:**
+- CDK context: `chaimApiBaseUrl`
+- Environment variable: `CHAIM_API_BASE_URL`
+
+### Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/ingest/upload-url` | POST | Request presigned S3 upload URL |
+| `/ingest/snapshot-ref` | POST | Commit snapshot reference (UPSERT or DELETE) |
+
+---
+
+## Snapshot Locations
+
+### LOCAL Snapshots (OS Cache)
+
+LOCAL snapshots are written to a **global OS cache** for CLI consumption. This allows the CLI to work from any directory without requiring access to the CDK project.
+
+**Default locations:**
+- macOS/Linux: `~/.chaim/cache/snapshots/`
+- Windows: `%LOCALAPPDATA%/chaim/cache/snapshots/`
+
+**Override:** Set `CHAIM_SNAPSHOT_DIR` environment variable.
+
+**Directory Structure:**
+```
+~/.chaim/cache/snapshots/
+└── aws/
+    └── {accountId}/
+        └── {region}/
+            └── {stackName}/
+                └── {datastoreType}/
+                    └── {resourceId}.json
+```
+
+### Lambda Asset Directory (CDK Asset)
+
+Lambda reads its snapshot from a bundled asset directory, **NOT** from environment variables or OS cache.
+
+**Location:** `<cdkRoot>/cdk.out/chaim/assets/{stackName}/{resourceId}/`
+
+**Contents:**
+- `snapshot.json` - The snapshot payload
+- `index.js` - Copy of canonical handler from `src/lambda-handler/handler.js`
+
+This directory is discovered by walking up from the module to find `cdk.json`, not by using `process.cwd()`. Asset directories are **isolated per stack+resourceId** and **overwritten on each synth**.
 
 ---
 
@@ -179,140 +328,21 @@ new ChaimDynamoDBBinder(this, 'UserSchema', {
 | `credentials` | `IChaimCredentials` | Yes | API credentials (use `ChaimCredentials` factory) |
 | `failureMode` | `FailureMode` | No | Default: `BEST_EFFORT` |
 
-### ChaimCredentials Factory
-
-Use the `ChaimCredentials` factory to configure API credentials:
-
-```typescript
-// Secrets Manager (recommended for production)
-ChaimCredentials.fromSecretsManager('chaim/api-credentials')
-
-// Direct API keys (for development/testing)
-ChaimCredentials.fromApiKeys(apiKey, apiSecret)
-```
-
-### Secrets Manager Secret Shape
-
-```json
-{
-  "apiKey": "your-chaim-api-key",
-  "apiSecret": "your-chaim-api-secret"
-}
-```
-
-## Cross-Repo Contract Compatibility
-
-All provider-specific ingestion clients (AWS CDK, Terraform, Azure, GCP, on-prem) must implement the same Chaim ingest plane contract:
-
-- `POST /ingest/upload-url`
-- `PUT <presignedUrl>` (upload snapshot bytes)
-- `POST /ingest/snapshot-ref` (commit pointer + metadata)
-
-Required invariants:
-- `eventId` is UUID v4 and commits are **idempotent by eventId**
-- `contentHash` is SHA-256 of uploaded snapshot bytes
-- Orchestrator response (e.g., CloudFormation) must remain **small** (eventId + status only)
-- Auth must be enforced consistently (credentials + signing)
-
-
-## SaaS Ingestion Flow (Agent Contract)
-
-### Goal
-On every CloudFormation Create/Update/Delete, publish a snapshot of:
-- `.bprint` schema intent
-- DynamoDB table metadata
-- stack context (account/region/stack identifiers)
-to Chaim SaaS using AWS S3 presigned upload + pointer commit.
-
-### Non-Goals
-
-The chaim-cdk package does NOT:
-- Perform runtime data access or interception
-- Enforce data policies at request time
-- Scan existing cloud infrastructure
-- Mutate customer data stores beyond declared CDK resources
-- Persist customer data outside of Chaim ingestion workflows
-
-
-### Inputs (from CDK props / environment)
-- appId (required)
-- credentials (apiKey/apiSecret or Secrets Manager ref) (required)
-- schemaPath (required)
-- DynamoDB table ref (required)
-- failureMode: FailureMode.BEST_EFFORT (default) | FailureMode.STRICT
-
-### Outputs (to CloudFormation response)
-- eventId (UUID v4)
-- ingestStatus: ACCEPTED | FAILED_BEST_EFFORT | FAILED_STRICT
-
-### Sequence (runtime during CFN deployment)
-1. Collect metadata: tableName/tableArn/keys/indexes/ttl/streams/encryption + stack account/region/stackId/stackName
-2. Load + validate `.bprint` (must pass `@chaim-tools/chaim-bprint-spec`)
-3. Build snapshot payload:
-   - eventId = UUID v4
-   - contentHash = SHA-256(snapshot bytes)
-4. Request presigned upload URL:
-   - POST /ingest/upload-url (auth required)
-5. Upload snapshot:
-   - PUT <presignedUrl> (bytes)
-6. Commit snapshot reference:
-   - POST /ingest/snapshot-ref (eventId + contentHash + s3 bucket/key + metadata)
-7. Respond to CloudFormation:
-   - STRICT: fail on any error in steps 4–6
-   - BEST_EFFORT: always succeed stack; set ingestStatus accordingly
-
-### Invariants (must/never)
-- MUST NOT send large snapshots inline to CloudFormation or API Gateway.
-- MUST NOT log credentials or secrets.
-- MUST return a small CFN response only (eventId + ingestStatus).
-- MUST be idempotent by eventId (safe on retries).
-- MUST treat duplicate eventId submissions as safe no-ops (idempotent ingest).
-
-### Failure Modes
-
-| Mode | Behavior |
-|------|----------|
-| `BEST_EFFORT` (default) | Log errors, return SUCCESS to CloudFormation |
-| `STRICT` | Return FAILED to CloudFormation on any ingestion error |
-
 ---
 
-## Snapshot Locations
+## Usage with chaim-cli
 
-All snapshots are written to a standardized directory structure under `cdk.out/chaim/snapshots/`:
-
-```
-cdk.out/chaim/snapshots/
-├── preview/                    # Synth-time snapshots
-│   └── <stackName>.json       # e.g., MyStack.json
-└── registered/                 # Deploy-time snapshots  
-    └── <stackName>-<eventId>.json  # e.g., MyStack-550e8400-e29b-41d4-a716-446655440000.json
-```
-
-### Snapshot Modes
-
-| Mode | When Created | Contains | Purpose |
-|------|--------------|----------|---------|
-| `PREVIEW` | `cdk synth` | schema, dataStore, context, capturedAt | Local development, code generation without deploy |
-| `REGISTERED` | `cdk deploy` | All preview fields + eventId, contentHash | Production tracking, audit trail |
-
-### File Naming
-
-- **Preview**: `preview/<stackName>.json` (single file, overwritten on each synth)
-- **Registered**: `registered/<stackName>-<eventId>.json` (new file per deploy, UUID v4 suffix)
-
-### Usage with chaim-cli
-
-The CLI reads snapshots from this directory to generate SDKs:
+The CLI reads LOCAL snapshots from the OS cache:
 
 ```bash
-# Preview workflow (no deploy needed)
-cdk synth
-chaim generate --mode preview
+# Generate all entities (newest snapshot by capturedAt)
+chaim generate --package com.example.model
 
-# Registered workflow (after deploy)
-cdk deploy
-chaim generate --mode registered
+# Filter by stack name
+chaim generate --stack MyStack --package com.example.model
+
+# Override snapshot directory
+chaim generate --snapshot-dir /custom/path --package com.example.model
 ```
 
 ---
@@ -335,54 +365,62 @@ chaim generate --mode registered
 
 ---
 
-## Package Exports
+## SaaS Ingestion Flow (Agent Contract)
 
-```typescript
-// Main construct
-export { ChaimDynamoDBBinder, ChaimDynamoDBBinderProps } from './binders/chaim-dynamodb-binder';
+### Goal
+On every CloudFormation Create/Update/Delete, notify Chaim SaaS:
+- **Create/Update**: Upload full snapshot via S3 presigned URL + commit pointer
+- **Delete**: Send minimal deactivation notification to mark the binding as inactive
 
-// Base class (for extension)
-export { BaseChaimBinder } from './binders/base-chaim-binder';
+### Non-Goals
 
-// Credentials factory
-export { ChaimCredentials, IChaimCredentials } from './types/credentials';
+The chaim-cdk package does NOT:
+- Perform runtime data access or interception
+- Enforce data policies at request time
+- Scan existing cloud infrastructure
+- Mutate customer data stores beyond declared CDK resources
+- Persist customer data outside of Chaim ingestion workflows
 
-// Failure mode enum
-export { FailureMode } from './types/failure-mode';
+### Sequence (runtime during CFN deployment)
 
-// Types
-export { BaseBinderProps } from './types/base-binder-props';
-export { DynamoDBMetadata, DataStoreMetadata } from './types/data-store-metadata';
+**Create/Update (UPSERT):**
+1. Lambda reads snapshot bytes from bundled `./snapshot.json`
+2. Generate `eventId` (UUID v4) at runtime
+3. Compute `contentHash` = SHA-256(snapshot bytes)
+4. POST /ingest/upload-url (auth required) → get presigned S3 URL
+5. PUT snapshot bytes to presigned URL
+6. POST /ingest/snapshot-ref with `action: 'UPSERT'`
+7. Respond to CloudFormation based on FailureMode
 
-// Snapshot types (dual-mode support)
-export {
-  SnapshotPayload,           // Union type: PreviewSnapshotPayload | RegisteredSnapshotPayload
-  SnapshotMode,              // 'PREVIEW' | 'REGISTERED'
-  StackContext,
-  BaseSnapshotPayload,       // Shared fields
-  PreviewSnapshotPayload,    // Synth-time payload (no eventId/contentHash)
-  RegisteredSnapshotPayload, // Deploy-time payload (includes eventId/contentHash)
-  isPreviewSnapshot,         // Type guard
-  isRegisteredSnapshot,      // Type guard
-} from './types/snapshot-payload';
+**Delete:**
+1. Lambda reads minimal metadata from bundled `./snapshot.json`
+2. Generate `eventId` (UUID v4) for the delete event
+3. POST /ingest/snapshot-ref with `action: 'DELETE'`
+4. Respond to CloudFormation based on FailureMode
 
-// Snapshot path utilities
-export {
-  getBaseSnapshotDir,        // Returns cdk.out/chaim/snapshots
-  getModeDir,                // Returns base/preview or base/registered
-  getPreviewSnapshotPath,    // Returns path for preview snapshot
-  getRegisteredSnapshotPath, // Returns path for registered snapshot
-  writePreviewSnapshot,      // Writes preview snapshot to disk
-  writeRegisteredSnapshot,   // Writes registered snapshot to disk
-} from './services/snapshot-paths';
+### Invariants (must/never)
+- MUST NOT send large snapshots inline to CloudFormation or API Gateway.
+- MUST NOT log credentials or secrets.
+- MUST return a small CFN response only (eventId + status).
+- MUST be safe on CloudFormation retries.
+- MUST store `eventId` in `PhysicalResourceId` and reuse on retry (same CFN RequestId = same eventId).
 
-// Services
-export { SchemaService } from './services/schema-service';
-export { IngestionService } from './services/ingestion-service';
+### Idempotency Model
 
-// Re-exports from bprint-spec
-export { SchemaData, Entity, Field, PrimaryKey } from '@chaim-tools/chaim-bprint-spec';
-```
+| Key | Purpose | When Used |
+|-----|---------|-----------|
+| `resourceId + contentHash` | **Deduplication** - SaaS ignores uploads with identical content | Every UPSERT |
+| `eventId` | **Audit trail** - Unique per CFN operation, stored in PhysicalResourceId | Tracking/lineage |
+| `CloudFormation RequestId` | **Retry detection** - Same RequestId on retry triggers eventId reuse | CFN retries |
+
+> **CloudFormation retry behavior:** On retry, the Lambda receives the same `RequestId`. The handler checks if `PhysicalResourceId` already contains an eventId and reuses it, ensuring the same eventId is submitted to SaaS. The SaaS treats duplicate eventId submissions as safe no-ops.
+
+### Failure Modes
+
+| Mode | Behavior |
+|------|----------|
+| `BEST_EFFORT` (default) | Log errors, return SUCCESS to CloudFormation |
+| `STRICT` | Return FAILED to CloudFormation on any ingestion error |
 
 ---
 
@@ -402,68 +440,20 @@ export { SchemaData, Entity, Field, PrimaryKey } from '@chaim-tools/chaim-bprint
 
 | File | Purpose |
 |------|---------|
+| `src/lambda-handler/handler.js` | Canonical Lambda handler (presigned upload flow) |
 | `src/binders/base-chaim-binder.ts` | Abstract base class with shared ingestion logic |
 | `src/binders/chaim-dynamodb-binder.ts` | DynamoDB-specific implementation |
-| `src/types/base-binder-props.ts` | Shared props interface (credentials, appId) |
-| `src/types/data-store-metadata.ts` | Metadata types per data store |
-| `src/types/snapshot-payload.ts` | Ingestion payload structure |
-| `src/services/schema-service.ts` | Schema loading and validation |
-| `src/services/ingestion-service.ts` | API configuration and utilities |
+| `src/config/chaim-endpoints.ts` | Centralized API URLs and constants |
+| `src/types/ingest-contract.ts` | API request/response type definitions |
+| `src/types/snapshot-payload.ts` | LocalSnapshotPayload and legacy types |
+| `src/types/credentials.ts` | ChaimCredentials factory class |
+| `src/types/failure-mode.ts` | FailureMode enum definition |
+| `src/services/os-cache-paths.ts` | OS cache directory utilities |
+| `src/services/cdk-project-root.ts` | CDK project root discovery |
 | `src/services/snapshot-paths.ts` | Snapshot file path utilities |
-
----
-
-## Integration with chaim-bprint-spec
-
-The chaim-cdk depends on `@chaim-tools/chaim-bprint-spec` for:
-
-1. **TypeScript Types**: `SchemaData`, `Entity`, `Field`, `FieldConstraints`
-2. **Schema Validation**: `validateSchema()` function
-3. **Re-exports**: Types are re-exported for consumer convenience
-
-```typescript
-import { validateSchema, SchemaData } from '@chaim-tools/chaim-bprint-spec';
-
-const schemaData: SchemaData = validateSchema(rawSchema);
-```
-
----
-
-## Integration with chaim-cli
-
-The chaim-cli consumes snapshot files produced by this package:
-
-1. **Snapshot Discovery**: CLI looks in `cdk.out/chaim/snapshots/{preview|registered}/`
-2. **Mode Selection**: CLI supports `--mode preview|registered|auto`
-3. **Code Generation**: CLI reads schema + dataStore metadata from snapshots to generate SDKs
-
-**Contract**: Snapshots must include:
-- `snapshotMode`: `'PREVIEW'` or `'REGISTERED'`
-- `capturedAt`: ISO 8601 timestamp
-- `schema`: Validated `.bprint` schema data
-- `dataStore`: Data store metadata (DynamoDB config, etc.)
-- `context`: Stack context (account, region, stackName, stackId)
-
-**Registered-only fields**:
-- `eventId`: UUID v4
-- `contentHash`: SHA-256 of payload
-
----
-
-## Future Extensibility
-
-The architecture supports adding new data store binders:
-
-1. Create new class extending `BaseChaimBinder`
-2. Implement `extractMetadata()` with store-specific logic
-3. Define props interface extending `BaseBinderProps`
-4. Add metadata type to `DataStoreMetadata` union
-
-**Planned future binders:**
-- `ChaimAuroraBinder` - Aurora PostgreSQL/MySQL clusters
-- `ChaimRDSBinder` - RDS instances
-- `ChaimDocumentDBBinder` - DocumentDB clusters
-- `ChaimS3Binder` - S3 Object
+| `src/services/stable-identity.ts` | Stable identity and collision handling |
+| `src/services/schema-service.ts` | Schema loading and validation |
+| `src/services/ingestion-service.ts` | Ingestion service utilities |
 
 ---
 
@@ -481,4 +471,4 @@ The architecture supports adding new data store binders:
 
 ---
 
-**Note**: This document reflects the Chaim SaaS integration architecture. All binders require Chaim API credentials and publish to the Chaim platform via S3 presigned upload.
+**Note**: This document reflects the Chaim SaaS integration architecture. All binders require Chaim API credentials and publish to the Chaim platform via S3 presigned upload. LOCAL snapshots are written to the OS cache for CLI consumption.

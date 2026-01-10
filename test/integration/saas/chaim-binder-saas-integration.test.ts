@@ -7,7 +7,7 @@ beforeAll(() => {
   validateAwsCredentials();
 });
 
-describe('ChaimBinder SaaS Mode Integration Tests', () => {
+describe('ChaimBinder Integration Tests', () => {
   const region = getAwsRegion();
   const deployedStacks: string[] = [];
 
@@ -22,26 +22,29 @@ describe('ChaimBinder SaaS Mode Integration Tests', () => {
     }
   });
 
-  // TODO: SaaS mode tests will be implemented later
-  // These tests require API credentials and may incur costs
+  // TODO: Integration tests require API credentials and may incur costs
   // Placeholder for future implementation
-  it.skip('should deploy stack with ChaimBinder in SaaS mode and verify resources', async () => {
-    // Placeholder for SaaS mode integration test
+  it.skip('should deploy stack with ChaimDynamoDBBinder and verify resources', async () => {
     // This will verify:
-    // - Lambda function deployment
+    // - Lambda function deployment with canonical handler
     // - Custom resource creation
     // - Secrets Manager integration (if used)
-    // - All OSS mode verifications plus SaaS-specific resources
+    // - Snapshot asset bundling
     // - API integration with Chaim platform
-    // - Schema registration in external system
+    // - Schema registration via presigned URL flow
   });
 
-  it.skip('should handle SaaS mode with Secrets Manager for API credentials', async () => {
-    // Placeholder for SaaS mode with Secrets Manager integration test
+  it.skip('should handle ChaimBinder with Secrets Manager for API credentials', async () => {
     // This will verify:
     // - Secrets Manager secret creation
     // - Lambda function can retrieve credentials from Secrets Manager
     // - Custom resource uses Secrets Manager credentials
   });
-});
 
+  it.skip('should handle Delete event and send deactivation notification', async () => {
+    // This will verify:
+    // - Delete event triggers deactivation notification
+    // - POST /ingest/snapshot-ref with action: 'DELETE'
+    // - CloudFormation resource cleanup
+  });
+});

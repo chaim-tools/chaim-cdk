@@ -19,8 +19,55 @@ export interface StackContext {
 }
 
 /**
- * Complete snapshot payload sent to Chaim SaaS ingestion API.
- * This is uploaded to S3 via presigned URL, then committed via snapshot-ref.
+ * LOCAL snapshot payload written to OS cache during synthesis.
+ * 
+ * This is the primary snapshot type used for CLI code generation
+ * and Lambda bundling at synth-time.
+ * 
+ * Note: Does NOT contain eventId or contentHash - those are generated
+ * at deploy-time by the Lambda handler.
+ */
+export interface LocalSnapshotPayload {
+  /** Cloud provider */
+  readonly provider: 'aws';
+
+  /** AWS account ID (may be 'unknown' if unresolved at synth) */
+  readonly accountId: string;
+
+  /** AWS region (may be 'unknown' if unresolved at synth) */
+  readonly region: string;
+
+  /** CDK stack name */
+  readonly stackName: string;
+
+  /** Data store type (e.g., 'dynamodb') */
+  readonly datastoreType: string;
+
+  /** User-provided display label for the resource */
+  readonly resourceName: string;
+
+  /** Generated resource ID: {resourceName}__{entityName}[__N] */
+  readonly resourceId: string;
+
+  /** Application ID from ChaimBinder props */
+  readonly appId: string;
+
+  /** Validated .bprint schema data */
+  readonly schema: SchemaData;
+
+  /** Data store metadata (DynamoDB, Aurora, etc.) */
+  readonly dataStore: DataStoreMetadata;
+
+  /** CDK stack context */
+  readonly context: StackContext;
+
+  /** ISO 8601 timestamp of snapshot creation */
+  readonly capturedAt: string;
+}
+
+/**
+ * @deprecated Use LocalSnapshotPayload instead.
+ * Complete snapshot payload - legacy type for backwards compatibility.
  */
 export interface SnapshotPayload {
   /** Unique event ID (UUID v4) - one per deploy/publish */
@@ -79,4 +126,3 @@ export interface CustomResourceResponseData {
   /** Timestamp */
   readonly Timestamp: string;
 }
-

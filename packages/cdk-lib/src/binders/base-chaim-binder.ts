@@ -2,21 +2,27 @@ import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
-import { SchemaData, validateSchema } from '@chaim-tools/chaim-bprint-spec';
+import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { BaseBinderProps, validateCredentials } from '../types/base-binder-props';
 import { DataStoreMetadata } from '../types/data-store-metadata';
-import { SnapshotPayload, StackContext } from '../types/snapshot-payload';
+import { LocalSnapshotPayload, StackContext } from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
 import { FailureMode } from '../types/failure-mode';
+import {
+  DEFAULT_CHAIM_API_BASE_URL,
+  DEFAULT_MAX_SNAPSHOT_BYTES,
+} from '../config/chaim-endpoints';
 
-/** Default API endpoint - can be overridden via CDK context for maintainers */
-const DEFAULT_API_BASE_URL = 'https://ingest.chaim.co';
-
-/** Default max snapshot size (10MB) - internal guardrail */
-const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
+/**
+ * Path to the canonical Lambda handler file.
+ * This handler implements the presigned upload flow for Chaim ingestion.
+ */
+const LAMBDA_HANDLER_PATH = path.join(__dirname, '..', 'lambda-handler', 'handler.js');
 
 /**
  * Abstract base class for all Chaim data store binders.
@@ -24,9 +30,11 @@ const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
  * Provides shared infrastructure:
  * - Schema loading and validation
  * - Snapshot payload construction
+ * - LOCAL snapshot writing during CDK synth (to OS cache)
  * - Lambda-backed custom resource for S3 presigned upload + snapshot-ref
  *
- * Subclasses implement `extractMetadata()` for store-specific metadata extraction.
+ * Subclasses implement `extractMetadata()` for store-specific metadata extraction
+ * and optionally override `getTable()` for DynamoDB-like resources.
  */
 export abstract class BaseChaimBinder extends Construct {
   /** Validated schema data */
@@ -35,8 +43,8 @@ export abstract class BaseChaimBinder extends Construct {
   /** Extracted data store metadata */
   public readonly dataStoreMetadata: DataStoreMetadata;
 
-  /** Unique event ID for this deployment */
-  public readonly eventId: string;
+  /** Generated resource ID ({resourceName}__{entityName}[__N]) */
+  public readonly resourceId: string;
 
   /** Base props (credentials, appId, etc.) */
   protected readonly baseProps: BaseBinderProps;
@@ -49,20 +57,38 @@ export abstract class BaseChaimBinder extends Construct {
     // Validate credentials
     validateCredentials(props);
 
-    // Generate unique event ID
-    this.eventId = crypto.randomUUID();
-
     // Load and validate schema
     this.schemaData = SchemaService.readSchema(props.schemaPath);
 
     // Extract data store metadata (implemented by subclass)
     this.dataStoreMetadata = this.extractMetadata();
 
-    // Build snapshot payload
-    const snapshot = this.buildSnapshot();
+    // Build stack context
+    const stack = cdk.Stack.of(this);
+    const stackName = stack.stackName;
+    const datastoreType = this.dataStoreMetadata.type;
+
+    // Get resource and entity names
+    const resourceName = this.getResourceName();
+    const entityName = this.getEntityName();
+
+    // Generate resource ID
+    this.resourceId = `${resourceName}__${entityName}`;
+
+    // Build LOCAL snapshot payload
+    const localSnapshot = this.buildLocalSnapshot({
+      accountId: stack.account,
+      region: stack.region,
+      stackName,
+      datastoreType,
+      resourceName,
+    });
+
+    // Get or create asset directory
+    const assetDir = this.writeSnapshotAsset(localSnapshot, stackName);
 
     // Deploy Lambda-backed custom resource for ingestion
-    this.deployIngestionResources(snapshot);
+    this.deployIngestionResources(assetDir);
   }
 
   /**
@@ -71,63 +97,155 @@ export abstract class BaseChaimBinder extends Construct {
   protected abstract extractMetadata(): DataStoreMetadata;
 
   /**
-   * Build the complete snapshot payload for Chaim ingestion.
+   * Override in subclasses to provide the table construct for stable identity.
+   * Default returns undefined (will fall back to construct path).
    */
-  private buildSnapshot(): SnapshotPayload {
-    const stack = cdk.Stack.of(this);
+  protected getTable(): dynamodb.ITable | undefined {
+    return undefined;
+  }
 
-    const context: StackContext = {
+  /**
+   * Get the resource name for display and filenames.
+   * For DynamoDB, this is the user label (not necessarily the physical table name).
+   */
+  private getResourceName(): string {
+    const metadata = this.dataStoreMetadata as any;
+    return metadata.tableName || metadata.name || 'resource';
+  }
+
+  /**
+   * Get the entity name from schema.
+   * Falls back to deriving from namespace if entity.name is not present.
+   */
+  private getEntityName(): string {
+    const entity = this.schemaData.entity as any;
+    if (entity?.name) {
+      return entity.name;
+    }
+    // Fallback: derive from namespace
+    const namespace = this.schemaData.namespace;
+    const parts = namespace.split('.');
+    const lastPart = parts[parts.length - 1];
+    return lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+  }
+
+  /**
+   * Build the base snapshot context (shared across snapshots).
+   */
+  private buildStackContext(): StackContext {
+    const stack = cdk.Stack.of(this);
+    return {
       account: stack.account,
       region: stack.region,
       stackId: stack.stackId,
       stackName: stack.stackName,
     };
+  }
 
-    const payloadWithoutHash = {
-      eventId: this.eventId,
+  /**
+   * Build a LOCAL snapshot payload for CLI consumption.
+   * Does not include eventId or contentHash - those are generated at deploy-time.
+   */
+  private buildLocalSnapshot(params: {
+    accountId: string;
+    region: string;
+    stackName: string;
+    datastoreType: string;
+    resourceName: string;
+  }): LocalSnapshotPayload {
+    const capturedAt = new Date().toISOString();
+
+    return {
+      provider: 'aws',
+      accountId: params.accountId,
+      region: params.region,
+      stackName: params.stackName,
+      datastoreType: params.datastoreType,
+      resourceName: params.resourceName,
+      resourceId: this.resourceId,
       appId: this.baseProps.appId,
       schema: this.schemaData,
       dataStore: this.dataStoreMetadata,
-      context,
-      timestamp: new Date().toISOString(),
-    };
-
-    // Compute content hash
-    const contentHash = this.computeContentHash(payloadWithoutHash);
-
-    return {
-      ...payloadWithoutHash,
-      contentHash,
+      context: this.buildStackContext(),
+      capturedAt,
     };
   }
 
   /**
-   * Compute SHA-256 hash of payload content.
+   * Ensure directory exists, creating it if necessary.
    */
-  private computeContentHash(payload: object): string {
-    const hash = crypto.createHash('sha256');
-    hash.update(JSON.stringify(payload));
-    return 'sha256:' + hash.digest('hex');
+  private ensureDirExists(dir: string): void {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  /**
+   * Find the CDK project root by walking up from current module.
+   */
+  private findCdkProjectRoot(): string {
+    let currentDir = __dirname;
+    for (let i = 0; i < 10; i++) {
+      const cdkJsonPath = path.join(currentDir, 'cdk.json');
+      if (fs.existsSync(cdkJsonPath)) {
+        return currentDir;
+      }
+      const parentDir = path.dirname(currentDir);
+      if (parentDir === currentDir) {
+        break;
+      }
+      currentDir = parentDir;
+    }
+    // Fallback to cwd
+    return process.cwd();
+  }
+
+  /**
+   * Write snapshot and Lambda handler to isolated CDK asset directory for Lambda bundling.
+   * 
+   * Asset directory is per {stackName}/{resourceId} and MUST NOT be shared.
+   * The Lambda reads ./snapshot.json from its bundle, NOT from env vars or OS cache.
+   * 
+   * The handler is copied from the canonical handler file (src/lambda-handler/handler.js)
+   * rather than being generated inline - this ensures a single source of truth.
+   *
+   * @returns The asset directory path
+   */
+  private writeSnapshotAsset(snapshot: LocalSnapshotPayload, stackName: string): string {
+    const cdkRoot = this.findCdkProjectRoot();
+    const assetDir = path.join(cdkRoot, 'cdk.out', 'chaim', 'assets', stackName, this.resourceId);
+    this.ensureDirExists(assetDir);
+
+    // Write snapshot.json (OVERWRITE each synth)
+    const snapshotPath = path.join(assetDir, 'snapshot.json');
+    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+
+    // Copy canonical Lambda handler (OVERWRITE each synth)
+    const handlerDestPath = path.join(assetDir, 'index.js');
+    fs.copyFileSync(LAMBDA_HANDLER_PATH, handlerDestPath);
+
+    return assetDir;
   }
 
   /**
    * Deploy Lambda function and custom resource for ingestion.
    */
-  private deployIngestionResources(snapshot: SnapshotPayload): void {
-    const handler = this.createIngestionLambda(snapshot);
-    this.createCustomResource(handler, snapshot);
+  private deployIngestionResources(assetDir: string): void {
+    const handler = this.createIngestionLambda(assetDir);
+    this.createCustomResource(handler);
   }
 
   /**
    * Create Lambda function for ingestion workflow.
+   * Lambda reads snapshot from its bundled asset directory.
    */
-  private createIngestionLambda(snapshot: SnapshotPayload): lambda.Function {
+  private createIngestionLambda(assetDir: string): lambda.Function {
     const handler = new lambda.Function(this, 'IngestionHandler', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
-      code: lambda.Code.fromInline(this.getIngestionHandlerCode()),
+      code: lambda.Code.fromAsset(assetDir),
       timeout: cdk.Duration.minutes(5),
-      environment: this.buildLambdaEnvironment(snapshot),
+      environment: this.buildLambdaEnvironment(),
     });
 
     // Grant CloudWatch Logs permissions
@@ -156,15 +274,15 @@ export abstract class BaseChaimBinder extends Construct {
 
   /**
    * Build Lambda environment variables.
+   * Note: Snapshot is NOT passed via env - Lambda reads from bundled asset.
    */
-  private buildLambdaEnvironment(snapshot: SnapshotPayload): Record<string, string> {
+  private buildLambdaEnvironment(): Record<string, string> {
     const { credentials } = this.baseProps;
 
     // Allow maintainer override via CDK context, otherwise use default
-    const apiBaseUrl = this.node.tryGetContext('chaimApiBaseUrl') ?? DEFAULT_API_BASE_URL;
+    const apiBaseUrl = this.node.tryGetContext('chaimApiBaseUrl') ?? DEFAULT_CHAIM_API_BASE_URL;
 
     const env: Record<string, string> = {
-      SNAPSHOT_PAYLOAD: JSON.stringify(snapshot),
       APP_ID: this.baseProps.appId,
       FAILURE_MODE: this.baseProps.failureMode ?? FailureMode.BEST_EFFORT,
       CHAIM_API_BASE_URL: apiBaseUrl,
@@ -184,208 +302,18 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Create CloudFormation custom resource.
    */
-  private createCustomResource(handler: lambda.Function, snapshot: SnapshotPayload): void {
+  private createCustomResource(handler: lambda.Function): void {
     const provider = new cr.Provider(this, 'IngestionProvider', {
       onEventHandler: handler,
     });
 
+    // Use resource ID for physical resource ID (stable across deploys)
     new cdk.CustomResource(this, 'IngestionResource', {
       serviceToken: provider.serviceToken,
       properties: {
-        EventId: this.eventId,
-        ContentHash: snapshot.contentHash,
-        Timestamp: snapshot.timestamp,
+        ResourceId: this.resourceId,
+        // ContentHash is computed at Lambda runtime
       },
     });
-  }
-
-  /**
-   * Inline Lambda handler code for ingestion.
-   * Handles: presigned URL request → S3 upload → snapshot-ref commit
-   */
-  private getIngestionHandlerCode(): string {
-    return `
-const https = require('https');
-const { URL } = require('url');
-
-exports.handler = async (event, context) => {
-  console.log('Event:', JSON.stringify(event, null, 2));
-  
-  const requestType = event.RequestType;
-  const failureMode = process.env.FAILURE_MODE || 'BEST_EFFORT';
-  const apiBaseUrl = process.env.CHAIM_API_BASE_URL || 'https://ingest.chaim.co';
-  const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || '10485760');
-  const snapshotPayload = JSON.parse(process.env.SNAPSHOT_PAYLOAD);
-  
-  try {
-    let apiKey, apiSecret;
-    
-    // Get credentials - check if SECRET_NAME is set for Secrets Manager mode
-    if (process.env.SECRET_NAME) {
-      const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
-      const client = new SecretsManagerClient();
-      const response = await client.send(new GetSecretValueCommand({
-        SecretId: process.env.SECRET_NAME,
-      }));
-      const secret = JSON.parse(response.SecretString);
-      apiKey = secret.apiKey;
-      apiSecret = secret.apiSecret;
-    } else {
-      apiKey = process.env.API_KEY;
-      apiSecret = process.env.API_SECRET;
-    }
-    
-    if (requestType === 'Delete') {
-      console.log('Delete request - no action needed');
-      return {
-        PhysicalResourceId: snapshotPayload.eventId,
-        Data: {
-          EventId: snapshotPayload.eventId,
-          IngestStatus: 'SUCCESS',
-          ContentHash: snapshotPayload.contentHash,
-          Timestamp: snapshotPayload.timestamp,
-        },
-      };
-    }
-    
-    // For Create/Update: Execute ingestion workflow
-    console.log('Executing ingestion workflow...');
-    
-    // Check snapshot size against guardrail
-    const snapshotBytes = JSON.stringify(snapshotPayload);
-    if (snapshotBytes.length > maxSnapshotBytes) {
-      throw new Error(\`Snapshot size (\${snapshotBytes.length} bytes) exceeds maximum allowed (\${maxSnapshotBytes} bytes)\`);
-    }
-    
-    // Step 1: Request presigned upload URL
-    const uploadUrlResponse = await httpRequest({
-      method: 'POST',
-      url: apiBaseUrl + '/ingest/upload-url',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-chaim-key': apiKey,
-      },
-      body: JSON.stringify({
-        appId: snapshotPayload.appId,
-        eventId: snapshotPayload.eventId,
-        contentHash: snapshotPayload.contentHash,
-      }),
-      apiSecret,
-    });
-    
-    const { uploadUrl } = JSON.parse(uploadUrlResponse);
-    console.log('Got presigned URL');
-    
-    // Step 2: Upload snapshot to S3
-    await httpRequest({
-      method: 'PUT',
-      url: uploadUrl,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: snapshotBytes,
-    });
-    console.log('Uploaded snapshot to S3');
-    
-    // Step 3: Commit snapshot reference
-    const commitResponse = await httpRequest({
-      method: 'POST',
-      url: apiBaseUrl + '/ingest/snapshot-ref',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-chaim-key': apiKey,
-      },
-      body: JSON.stringify({
-        appId: snapshotPayload.appId,
-        eventId: snapshotPayload.eventId,
-        contentHash: snapshotPayload.contentHash,
-        dataStoreType: snapshotPayload.dataStore.type,
-        dataStoreArn: snapshotPayload.dataStore.arn,
-      }),
-      apiSecret,
-    });
-    
-    console.log('Committed snapshot reference');
-    
-    return {
-      PhysicalResourceId: snapshotPayload.eventId,
-      Data: {
-        EventId: snapshotPayload.eventId,
-        IngestStatus: 'SUCCESS',
-        ContentHash: snapshotPayload.contentHash,
-        Timestamp: snapshotPayload.timestamp,
-      },
-    };
-    
-  } catch (error) {
-    console.error('Ingestion error:', error);
-    
-    if (failureMode === 'STRICT') {
-      throw error;
-    }
-    
-    // BEST_EFFORT: Return success to CloudFormation but log the error
-    return {
-      PhysicalResourceId: snapshotPayload.eventId,
-      Data: {
-        EventId: snapshotPayload.eventId,
-        IngestStatus: 'FAILED',
-        ContentHash: snapshotPayload.contentHash,
-        Timestamp: snapshotPayload.timestamp,
-        Error: error.message,
-      },
-    };
-  }
-};
-
-async function httpRequest({ method, url, headers, body, apiSecret }) {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    
-    const finalHeaders = { ...headers };
-    
-    // Add HMAC signature if apiSecret provided
-    if (apiSecret && body) {
-      const crypto = require('crypto');
-      const signature = crypto
-        .createHmac('sha256', apiSecret)
-        .update(body)
-        .digest('hex');
-      finalHeaders['x-chaim-signature'] = signature;
-    }
-    
-    const options = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || 443,
-      path: parsedUrl.pathname + parsedUrl.search,
-      method,
-      headers: finalHeaders,
-    };
-    
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(data);
-        } else {
-          reject(new Error(\`HTTP \${res.statusCode}: \${data}\`));
-        }
-      });
-    });
-    
-    req.on('error', reject);
-    req.setTimeout(30000, () => {
-      req.destroy();
-      reject(new Error('Request timeout'));
-    });
-    
-    if (body) {
-      req.write(body);
-    }
-    req.end();
-  });
-}
-`;
   }
 }

@@ -1,119 +1,97 @@
-import * as fs from 'fs';
 import * as path from 'path';
+import { getSnapshotBaseDir, ensureDirExists } from './os-cache-paths';
+
+// Re-export stable identity utilities
+export {
+  StableIdentity,
+  isToken,
+  getStableResourceKey,
+  buildMatchKey,
+  generateResourceId,
+  GenerateResourceIdParams,
+} from './stable-identity';
 
 /**
- * Snapshot mode enum for distinguishing preview vs registered snapshots.
+ * Parameters for constructing snapshot paths.
  */
-export type SnapshotMode = 'preview' | 'registered';
-
-/**
- * Default base directory for all Chaim snapshots.
- * Located within the CDK output directory.
- */
-const DEFAULT_BASE_DIR = 'cdk.out/chaim/snapshots';
-
-/**
- * Get the base snapshot directory path.
- * All snapshots (preview and registered) are stored under this directory.
- *
- * @returns Absolute path to the base snapshot directory
- */
-export function getBaseSnapshotDir(): string {
-  return path.join(process.cwd(), DEFAULT_BASE_DIR);
+export interface SnapshotPathParams {
+  /** AWS account ID (or 'unknown' if unresolved) */
+  accountId: string;
+  /** AWS region (or 'unknown' if unresolved) */
+  region: string;
+  /** CDK stack name */
+  stackName: string;
+  /** Data store type: 'dynamodb', 'aurora', etc. */
+  datastoreType: string;
+  /** Resource ID: {resourceName}__{entityName}[__N] */
+  resourceId: string;
 }
 
 /**
- * Get the directory path for a specific snapshot mode.
- *
- * @param mode - 'preview' or 'registered'
- * @returns Absolute path to the mode-specific directory
+ * Normalize account ID - handles CDK tokens and unresolved values.
+ * 
+ * @param accountId - Raw account ID (may be a CDK token)
+ * @returns Normalized account ID or 'unknown' if unresolved
  */
-export function getModeDir(mode: SnapshotMode): string {
-  return path.join(getBaseSnapshotDir(), mode);
+export function normalizeAccountId(accountId: string | undefined): string {
+  if (!accountId || accountId.includes('${Token') || accountId.includes('${AWS::')) {
+    return 'unknown';
+  }
+  return accountId;
 }
 
 /**
- * Get the full path for a preview snapshot file.
- * Preview snapshots are created during `cdk synth` and contain schema + metadata
- * without eventId/contentHash.
- *
- * @param stackName - The CDK stack name
- * @returns Absolute path to the preview snapshot file
- *
- * @example
- * getPreviewSnapshotPath('MyStack')
- * // -> '/path/to/project/cdk.out/chaim/snapshots/preview/MyStack.json'
+ * Normalize region - handles CDK tokens and unresolved values.
+ * 
+ * @param region - Raw region (may be a CDK token)
+ * @returns Normalized region or 'unknown' if unresolved
  */
-export function getPreviewSnapshotPath(stackName: string): string {
-  return path.join(getModeDir('preview'), `${stackName}.json`);
+export function normalizeRegion(region: string | undefined): string {
+  if (!region || region.includes('${Token') || region.includes('${AWS::')) {
+    return 'unknown';
+  }
+  return region;
 }
 
 /**
- * Get the full path for a registered snapshot file.
- * Registered snapshots are created during `cdk deploy` and include
- * eventId and contentHash for tracking.
- *
- * @param stackName - The CDK stack name
- * @param eventId - Unique event ID (UUID v4) for the deployment
- * @returns Absolute path to the registered snapshot file
- *
- * @example
- * getRegisteredSnapshotPath('MyStack', '550e8400-e29b-41d4-a716-446655440000')
- * // -> '/path/to/project/cdk.out/chaim/snapshots/registered/MyStack-550e8400-e29b-41d4-a716-446655440000.json'
+ * Get the directory path for LOCAL snapshots (for a specific stack/datastore).
+ * 
+ * Path structure: {base}/aws/{accountId}/{region}/{stackName}/{datastoreType}/
  */
-export function getRegisteredSnapshotPath(stackName: string, eventId: string): string {
-  return path.join(getModeDir('registered'), `${stackName}-${eventId}.json`);
+export function getSnapshotDir(params: Omit<SnapshotPathParams, 'resourceId'>): string {
+  return path.join(
+    getSnapshotBaseDir(),
+    'aws',
+    normalizeAccountId(params.accountId),
+    normalizeRegion(params.region),
+    params.stackName,
+    params.datastoreType
+  );
 }
 
 /**
- * Ensure a directory exists, creating it recursively if needed.
- *
- * @param dir - Directory path to ensure exists
+ * Get the full path to a LOCAL snapshot file.
+ * 
+ * Path structure: {base}/aws/{accountId}/{region}/{stackName}/{datastoreType}/{resourceId}.json
  */
-export function ensureDirectoryExists(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
+export function getLocalSnapshotPath(params: SnapshotPathParams): string {
+  return path.join(
+    getSnapshotDir(params),
+    `${params.resourceId}.json`
+  );
 }
 
 /**
- * Write a snapshot to the specified path, ensuring the directory exists.
- *
- * @param filePath - Full path to write the snapshot
- * @param snapshot - Snapshot payload object to serialize
+ * Write a LOCAL snapshot to the OS cache.
+ * Ensures the directory exists and overwrites any existing file.
  */
-export function writeSnapshot(filePath: string, snapshot: object): void {
-  const dir = path.dirname(filePath);
-  ensureDirectoryExists(dir);
+export function writeLocalSnapshot(params: SnapshotPathParams, snapshot: object): string {
+  const dir = getSnapshotDir(params);
+  ensureDirExists(dir);
+  
+  const filePath = getLocalSnapshotPath(params);
+  const fs = require('fs');
   fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
-}
-
-/**
- * Write a preview snapshot for a stack.
- *
- * @param stackName - The CDK stack name
- * @param snapshot - Snapshot payload object
- * @returns The path where the snapshot was written
- */
-export function writePreviewSnapshot(stackName: string, snapshot: object): string {
-  const filePath = getPreviewSnapshotPath(stackName);
-  writeSnapshot(filePath, snapshot);
+  
   return filePath;
 }
-
-/**
- * Write a registered snapshot for a stack.
- *
- * @param stackName - The CDK stack name
- * @param eventId - Unique event ID for this deployment
- * @param snapshot - Snapshot payload object
- * @returns The path where the snapshot was written
- */
-export function writeRegisteredSnapshot(
-  stackName: string,
-  eventId: string,
-  snapshot: object
-): string {
-  const filePath = getRegisteredSnapshotPath(stackName, eventId);
-  writeSnapshot(filePath, snapshot);
-  return filePath;
-}
-

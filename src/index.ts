@@ -27,32 +27,76 @@ export {
   DataStoreMetadata,
 } from './types/data-store-metadata';
 
+// Snapshot payload types (LOCAL for CLI, legacy types for backwards compatibility)
 export {
+  LocalSnapshotPayload,
+  StackContext,
+  IngestResponse,
+  CustomResourceResponseData,
+  // Legacy types (deprecated)
   SnapshotPayload,
   SnapshotMode,
-  StackContext,
   BaseSnapshotPayload,
   PreviewSnapshotPayload,
   RegisteredSnapshotPayload,
-  IngestResponse,
-  CustomResourceResponseData,
   isPreviewSnapshot,
   isRegisteredSnapshot,
 } from './types/snapshot-payload';
 
+// Ingest contract types
+export {
+  SnapshotAction,
+  UploadUrlRequest,
+  UploadUrlResponse,
+  SnapshotRefUpsertRequest,
+  SnapshotRefDeleteRequest,
+  SnapshotRefRequest,
+  SnapshotRefResponse,
+  CloudFormationRequestType,
+} from './types/ingest-contract';
+
+// Config exports
+export {
+  DEFAULT_CHAIM_API_BASE_URL,
+  CHAIM_ENDPOINTS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_SNAPSHOT_BYTES,
+} from './config/chaim-endpoints';
+
+// OS cache utilities
+export {
+  getSnapshotBaseDir,
+  getDefaultSnapshotBaseDir,
+  ensureDirExists,
+} from './services/os-cache-paths';
+
+// CDK project root discovery
+export {
+  findCdkProjectRoot,
+  getChaimAssetDir,
+} from './services/cdk-project-root';
+
+// Snapshot path utilities
+export {
+  normalizeAccountId,
+  normalizeRegion,
+  getSnapshotDir,
+  getLocalSnapshotPath,
+  writeLocalSnapshot,
+} from './services/snapshot-paths';
+
+// Stable identity for collision handling
+export {
+  StableIdentity,
+  isToken,
+  getStableResourceKey,
+  buildMatchKey,
+  generateResourceId,
+  GenerateResourceIdParams,
+} from './services/stable-identity';
+
 // Service exports
 export { SchemaService } from './services/schema-service';
-export {
-  getBaseSnapshotDir,
-  getModeDir,
-  getPreviewSnapshotPath,
-  getRegisteredSnapshotPath,
-  ensureDirectoryExists,
-  writeSnapshot,
-  writePreviewSnapshot,
-  writeRegisteredSnapshot,
-  SnapshotMode as SnapshotPathMode,
-} from './services/snapshot-paths';
 export {
   IngestionService,
   IngestionConfig,

@@ -87,3 +87,4 @@ export interface LSIMetadata {
 export type DataStoreMetadata = DynamoDBMetadata;
 // Future: | AuroraMetadata | RDSMetadata | DocumentDBMetadata;
 
+

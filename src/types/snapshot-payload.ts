@@ -1,10 +1,6 @@
 import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { DataStoreMetadata } from './data-store-metadata';
-
-/**
- * Snapshot mode distinguishes between preview (synth-time) and registered (deploy-time) snapshots.
- */
-export type SnapshotMode = 'PREVIEW' | 'REGISTERED';
+import { StableIdentity } from '../services/stable-identity';
 
 /**
  * Stack context captured during CDK synthesis.
@@ -24,6 +20,67 @@ export interface StackContext {
 }
 
 /**
+ * LOCAL snapshot payload written to OS cache during synthesis.
+ * 
+ * This is the primary snapshot type used for CLI code generation.
+ * Written at synth-time (runs for both `cdk synth` and `cdk deploy`).
+ * 
+ * Note: Does NOT contain eventId or contentHash - those are generated
+ * at deploy-time by the Lambda handler.
+ */
+export interface LocalSnapshotPayload {
+  /** Cloud provider */
+  readonly provider: 'aws';
+
+  /** AWS account ID (may be 'unknown' if unresolved at synth) */
+  readonly accountId: string;
+
+  /** AWS region (may be 'unknown' if unresolved at synth) */
+  readonly region: string;
+
+  /** CDK stack name */
+  readonly stackName: string;
+
+  /** Data store type (e.g., 'dynamodb') */
+  readonly datastoreType: string;
+
+  /** User-provided display label for the resource */
+  readonly resourceName: string;
+
+  /** Generated resource ID: {resourceName}__{entityName}[__N] */
+  readonly resourceId: string;
+
+  /** Stable identity for collision detection */
+  readonly identity: StableIdentity;
+
+  /** Application ID from ChaimBinder props */
+  readonly appId: string;
+
+  /** Validated .bprint schema data */
+  readonly schema: SchemaData;
+
+  /** Data store metadata (DynamoDB, Aurora, etc.) */
+  readonly dataStore: DataStoreMetadata;
+
+  /** CDK stack context */
+  readonly context: StackContext;
+
+  /** ISO 8601 timestamp of snapshot creation */
+  readonly capturedAt: string;
+}
+
+// ============================================================
+// DEPRECATED TYPES - Kept for backwards compatibility
+// ============================================================
+
+/**
+ * @deprecated Use LocalSnapshotPayload instead.
+ * Snapshot mode distinguishes between preview (synth-time) and registered (deploy-time) snapshots.
+ */
+export type SnapshotMode = 'PREVIEW' | 'REGISTERED';
+
+/**
+ * @deprecated Use LocalSnapshotPayload instead.
  * Base snapshot payload containing fields common to both preview and registered snapshots.
  */
 export interface BaseSnapshotPayload {
@@ -52,16 +109,16 @@ export interface BaseSnapshotPayload {
 }
 
 /**
+ * @deprecated Use LocalSnapshotPayload instead.
  * Preview snapshot payload created during `cdk synth`.
- * Does not include eventId or contentHash as no deployment has occurred.
  */
 export interface PreviewSnapshotPayload extends BaseSnapshotPayload {
   readonly snapshotMode: 'PREVIEW';
 }
 
 /**
+ * @deprecated Use LocalSnapshotPayload instead.
  * Registered snapshot payload created during `cdk deploy`.
- * Includes eventId and contentHash for tracking and idempotency.
  */
 export interface RegisteredSnapshotPayload extends BaseSnapshotPayload {
   readonly snapshotMode: 'REGISTERED';
@@ -74,14 +131,14 @@ export interface RegisteredSnapshotPayload extends BaseSnapshotPayload {
 }
 
 /**
+ * @deprecated Use LocalSnapshotPayload instead.
  * Complete snapshot payload - union of preview and registered types.
- * This is the main type used throughout the codebase.
  */
 export type SnapshotPayload = PreviewSnapshotPayload | RegisteredSnapshotPayload;
 
 /**
+ * @deprecated Use LocalSnapshotPayload instead.
  * Legacy snapshot payload interface for backwards compatibility.
- * @deprecated Use SnapshotPayload union type instead.
  */
 export interface LegacySnapshotPayload {
   /** Unique event ID (UUID v4) - one per deploy/publish */
@@ -142,6 +199,7 @@ export interface CustomResourceResponseData {
 }
 
 /**
+ * @deprecated Use LocalSnapshotPayload type checks instead.
  * Type guard to check if a snapshot is a preview snapshot.
  */
 export function isPreviewSnapshot(snapshot: SnapshotPayload): snapshot is PreviewSnapshotPayload {
@@ -149,6 +207,7 @@ export function isPreviewSnapshot(snapshot: SnapshotPayload): snapshot is Previe
 }
 
 /**
+ * @deprecated Use LocalSnapshotPayload type checks instead.
  * Type guard to check if a snapshot is a registered snapshot.
  */
 export function isRegisteredSnapshot(snapshot: SnapshotPayload): snapshot is RegisteredSnapshotPayload {

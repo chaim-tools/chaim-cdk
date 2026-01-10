@@ -10,21 +10,10 @@ npm install @chaim-tools/cdk-lib
 pnpm add @chaim-tools/cdk-lib
 ```
 
-## Prerequisites
-
-Before using `ChaimDynamoBinding`, you must:
-
-1. **Deploy your Chaim ingest API** (separate repository) and note its base URL
-2. **Activate the CloudFormation Registry type** in your AWS account using the Activator stack
-
-See the [Activator README](../activator/README.md) for activation instructions.
-
 ## Quick Start
 
-### Using Inline Schema
-
 ```typescript
-import { ChaimDynamoBinding } from '@chaim-tools/cdk-lib';
+import { ChaimDynamoDBBinder, ChaimCredentials, FailureMode } from '@chaim-tools/cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 
 // Create a DynamoDB table
@@ -33,74 +22,92 @@ const usersTable = new dynamodb.Table(this, 'Users', {
   billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
 });
 
-// Bind it to a schema (inline)
-new ChaimDynamoBinding(this, 'UsersBinding', {
-  appId: 'my-app',
+// Bind it to a schema using Secrets Manager for credentials (recommended)
+new ChaimDynamoDBBinder(this, 'UsersBinding', {
+  schemaPath: './schemas/users.bprint',
   table: usersTable,
-  schemaInline: {
-    schemaVersion: '1.0',
-    namespace: 'myapp.users',
-    description: 'Users table schema',
-    entity: {
-      primaryKey: { partitionKey: 'pk' },
-      fields: [
-        { name: 'pk', type: 'string', required: true },
-        { name: 'email', type: 'string', required: true },
-        { name: 'createdAt', type: 'timestamp', required: false },
-      ],
-    },
-  },
+  appId: 'my-app',
+  credentials: ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
 });
-```
 
-### Using Schema File Path
-
-```typescript
-import { ChaimDynamoBinding } from '@chaim-tools/cdk-lib';
-import * as path from 'path';
-
-// Bind from a .bprint file (read at synth time)
-new ChaimDynamoBinding(this, 'UsersBinding', {
-  appId: 'my-app',
+// Or use direct credentials for development/testing
+new ChaimDynamoDBBinder(this, 'UsersBinding', {
+  schemaPath: './schemas/users.bprint',
   table: usersTable,
-  schemaPath: path.join(__dirname, '..', 'schemas', 'users.bprint.json'),
-  // Also supports YAML: 'users.bprint.yaml'
+  appId: 'my-app',
+  credentials: ChaimCredentials.fromApiKeys(
+    process.env.CHAIM_API_KEY!,
+    process.env.CHAIM_API_SECRET!
+  ),
+  failureMode: FailureMode.STRICT,  // Optional - rolls back on failure
 });
 ```
 
 ## API Reference
 
-### `ChaimDynamoBinding`
+### `ChaimDynamoDBBinder`
 
 Construct that binds a DynamoDB table to a Chaim schema.
 
 #### Props
 
-- **`appId`** (string, required): Application identifier
-- **`table`** (`ITable`, required): DynamoDB table to bind
-- **`schemaPath`** (string, optional): Path to `.bprint` file (JSON or YAML)
-- **`schemaInline`** (object, optional): Schema object to embed directly
-- **`maxSchemaBytes`** (number, optional): Max schema size in bytes (default: 200,000)
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `schemaPath` | string | Yes | Path to `.bprint` schema file |
+| `table` | `ITable` | Yes | DynamoDB table to bind |
+| `appId` | string | Yes | Application ID for Chaim SaaS |
+| `credentials` | `IChaimCredentials` | Yes | API credentials (use `ChaimCredentials` factory) |
+| `failureMode` | `FailureMode` | No | Default: `BEST_EFFORT` |
 
-**Note**: You must provide exactly one of `schemaPath` or `schemaInline`.
+### `ChaimCredentials`
 
-#### Schema Size Limits
+Factory class for creating Chaim API credentials.
 
-For the pilot release, schemas are sent inline (max ~200 KB). Production will support S3 pointers for larger schemas.
+```typescript
+// Using AWS Secrets Manager (recommended for production)
+const credentials = ChaimCredentials.fromSecretsManager('chaim/api-credentials');
+
+// Using direct API keys (for development/testing)
+const credentials = ChaimCredentials.fromApiKeys(apiKey, apiSecret);
+```
+
+### `FailureMode`
+
+| Mode | Behavior |
+|------|----------|
+| `BEST_EFFORT` (default) | Log errors, return SUCCESS to CloudFormation |
+| `STRICT` | Return FAILED to CloudFormation on any ingestion error |
 
 ## How It Works
 
-1. At **synth time**: The construct reads your `.bprint` file (if using `schemaPath`) and embeds it as the `Schema` property
-2. During **deploy**: CloudFormation invokes the provider Lambda in your account
-3. The provider:
-   - Computes `bindingId` and `contentHash`
-   - Fetches API credentials from Secrets Manager (set by Activator)
-   - POSTs binding metadata + schema to your ingest API
-   - Returns CloudFormation attributes (`BindingId`, `ContentHash`, `AppliedAt`, `Status`)
+1. At **synth time**: The construct reads your `.bprint` file, validates it, and writes a snapshot to the CDK asset directory
+2. During **deploy**: CloudFormation invokes the ingestion Lambda in your account
+3. The Lambda:
+   - Reads the bundled snapshot from `./snapshot.json`
+   - Generates `eventId` (UUID v4) and `contentHash` (SHA-256)
+   - Requests presigned URL: `POST /ingest/upload-url`
+   - Uploads snapshot: `PUT <presignedUrl>`
+   - Commits reference: `POST /ingest/snapshot-ref`
 
-## Legacy: ChaimBinder
+## Ingestion Flow
 
-This package also includes the legacy `ChaimBinder` construct for OSS/SaaS mode. See the [main repository README](../../README.md) for details.
+```
+Create/Update:
+  1. POST /ingest/upload-url → get presigned S3 URL
+  2. PUT snapshot bytes to presigned URL
+  3. POST /ingest/snapshot-ref with action: 'UPSERT'
+
+Delete:
+  1. POST /ingest/snapshot-ref with action: 'DELETE'
+```
+
+## Configuration
+
+### Default API Base URL
+
+The default API base URL is `https://api.chaim.co`. Override via:
+- CDK context: `chaimApiBaseUrl`
+- Environment variable: `CHAIM_API_BASE_URL`
 
 ## License
 
