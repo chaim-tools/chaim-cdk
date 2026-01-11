@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    fileParallelism: false,
     include: ['test/unit/**/*.test.ts', 'src/**/*.test.ts'],
     exclude: ['test/integration/**/*.test.ts', '**/node_modules/**'],
     coverage: {
