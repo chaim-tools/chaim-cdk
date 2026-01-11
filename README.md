@@ -71,8 +71,9 @@ cdk deploy                          # Writes LOCAL + publishes to Chaim SaaS
 chaim generate --package com.example  # Generates SDK from LOCAL snapshot
 ```
 
-> **Terminology:** 
-> **LOCAL** = snapshot written to OS cache at synth time (for CLI). > **PUBLISHED** = snapshot sent to Chaim SaaS at deploy time (for governance/audit).
+> **Terminology** 
+> * **LOCAL** = snapshot written to OS cache at synth time (for CLI). 
+> * **PUBLISHED** = snapshot sent to Chaim SaaS at deploy time (for governance/audit).
 
 ## What Happens When
 
@@ -224,12 +225,26 @@ The hierarchical structure ensures:
 - Support for multiple entities per table (single-table design)
 - CLI works without access to CDK project directory
 
+## Examples
+
+The `packages/examples/` directory contains working CDK applications demonstrating Chaim integration patterns:
+
+- **consumer-cdk-app** - A complete example showing both direct API credentials and Secrets Manager patterns, with `BEST_EFFORT` and `STRICT` failure modes.
+
+Each example includes its own README with setup and deployment instructions.
+
+```bash
+cd packages/examples/consumer-cdk-app
+cat README.md
+```
+
 ## Related Packages
 
 | Package | Purpose |
 |---------|---------|
 | [chaim-bprint-spec](https://github.com/chaim-tools/chaim-bprint-spec) | Schema format specification (`.bprint` files) |
 | [chaim-cli](https://github.com/chaim-tools/chaim-cli) | Code generation from snapshots |
+| [chaim-examples-java](https://github.com/chaim-tools/chaim-examples-java) | Java application examples with generated SDKs |
 
 ## Coming Soon
 

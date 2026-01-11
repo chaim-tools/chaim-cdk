@@ -11,7 +11,7 @@
     "deploy": "cdk deploy",
     "diff": "cdk diff",
     "lint": "eslint . --ext .ts",
-    "clean": "rm -rf lib dist cdk.out"
+    "clean": "rm -rf dist cdk.out && find lib -name '*.js' -o -name '*.d.ts' -o -name '*.js.map' 2>/dev/null | xargs rm -f 2>/dev/null || true"
   },
   "keywords": [
     "aws",

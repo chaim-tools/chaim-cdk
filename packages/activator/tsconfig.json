@@ -2,8 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": ".",
-    "rootDir": ".",
-    "typeRoots": ["../../node_modules/@types"]
+    "rootDir": "."
   },
   "exclude": [
     "node_modules",

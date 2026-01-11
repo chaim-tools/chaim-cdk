@@ -10,9 +10,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/lambda-handler lib/",
     "watch": "tsc -w",
-    "test": "vitest run || true",
+    "test": "vitest run",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage",
     "lint": "eslint . --ext .ts",

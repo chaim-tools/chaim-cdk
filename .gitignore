@@ -6,10 +6,23 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Build outputs
-lib/
+# Note: CDK apps use lib/ as source dir, so we only ignore compiled output
+/lib/
 dist/
 build/
 *.tsbuildinfo
+
+# Compiled JavaScript in packages (ignore all .js/.d.ts but keep .ts source files)
+# Note: cdk-lib compiles src/ -> lib/, while activator & consumer-cdk-app use lib/ as source
+packages/cdk-lib/lib/
+packages/cfn-provider-dynamodb-binding/lib/
+packages/**/lib/**/*.js
+packages/**/lib/**/*.d.ts
+packages/**/lib/**/*.js.map
+
+# Test artifacts
+.test-temp/
+**/.test-temp/
 
 # Test coverage
 coverage/

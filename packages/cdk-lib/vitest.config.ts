@@ -4,8 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['test/unit/**/*.test.ts', 'src/**/*.test.ts'],
-    exclude: ['test/integration/**/*.test.ts', '**/node_modules/**'],
+    include: ['src/**/*.test.js', 'src/**/*.test.ts', 'test/**/*.test.ts'],
+    exclude: ['**/node_modules/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
@@ -14,7 +14,8 @@ export default defineConfig({
         'lib/',
         'dist/',
         '**/*.d.ts',
-        'test/**/*.test.ts'
+        '**/*.test.ts',
+        '**/*.test.js'
       ]
     }
   }
