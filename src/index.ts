@@ -27,20 +27,12 @@ export {
   DataStoreMetadata,
 } from './types/data-store-metadata';
 
-// Snapshot payload types (LOCAL for CLI, legacy types for backwards compatibility)
+// Snapshot payload types
 export {
   LocalSnapshotPayload,
   StackContext,
   IngestResponse,
   CustomResourceResponseData,
-  // Legacy types (deprecated)
-  SnapshotPayload,
-  SnapshotMode,
-  BaseSnapshotPayload,
-  PreviewSnapshotPayload,
-  RegisteredSnapshotPayload,
-  isPreviewSnapshot,
-  isRegisteredSnapshot,
 } from './types/snapshot-payload';
 
 // Ingest contract types

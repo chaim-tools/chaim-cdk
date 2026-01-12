@@ -66,33 +66,6 @@ export interface LocalSnapshotPayload {
 }
 
 /**
- * @deprecated Use LocalSnapshotPayload instead.
- * Complete snapshot payload - legacy type for backwards compatibility.
- */
-export interface SnapshotPayload {
-  /** Unique event ID (UUID v4) - one per deploy/publish */
-  readonly eventId: string;
-
-  /** Application ID from ChaimBinder props */
-  readonly appId: string;
-
-  /** Validated .bprint schema data */
-  readonly schema: SchemaData;
-
-  /** Data store metadata (DynamoDB, Aurora, etc.) */
-  readonly dataStore: DataStoreMetadata;
-
-  /** CDK stack context */
-  readonly context: StackContext;
-
-  /** ISO 8601 timestamp of snapshot creation */
-  readonly timestamp: string;
-
-  /** SHA-256 hash of the payload content */
-  readonly contentHash: string;
-}
-
-/**
  * Response from Chaim ingestion API after snapshot-ref commit.
  */
 export interface IngestResponse {

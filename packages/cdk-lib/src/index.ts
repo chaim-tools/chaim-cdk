@@ -33,8 +33,6 @@ export {
   StackContext,
   IngestResponse,
   CustomResourceResponseData,
-  // Legacy type (deprecated)
-  SnapshotPayload,
 } from './types/snapshot-payload';
 
 // Ingest contract types
