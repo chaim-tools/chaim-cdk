@@ -112,13 +112,22 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
 
   /**
    * Validate that the table is a concrete DynamoDB Table construct.
+   * 
+   * Note: We use duck typing for instanceof check to handle cross-package
+   * type compatibility issues in monorepo setups (e.g., pnpm with isolated node_modules).
    */
   private validateTable(table: dynamodb.ITable): void {
     if (!table) {
       throw new Error('DynamoDB table is required');
     }
 
-    if (!(table instanceof dynamodb.Table)) {
+    // Duck typing check: a concrete Table has node.defaultChild (CfnTable)
+    // This handles cross-package type compatibility in monorepos
+    const isConcreteTable = table instanceof dynamodb.Table || 
+      (table.node && table.node.defaultChild && 
+       (table.node.defaultChild as any).cfnResourceType === 'AWS::DynamoDB::Table');
+
+    if (!isConcreteTable) {
       throw new Error(
         'Table must be a concrete DynamoDB Table construct. Imported tables are not supported.'
       );
@@ -135,15 +144,14 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
 
   /**
    * Get the underlying CloudFormation table resource.
+   * Uses duck typing for cross-package compatibility.
    */
   private getCfnTable(table: dynamodb.ITable): dynamodb.CfnTable {
-    if (!(table instanceof dynamodb.Table)) {
+    // Use duck typing check for cross-package compatibility
+    const cfnTable = table.node?.defaultChild as dynamodb.CfnTable | undefined;
+    
+    if (!cfnTable || (cfnTable as any).cfnResourceType !== 'AWS::DynamoDB::Table') {
       throw new Error('Cannot access CloudFormation resource for imported table');
-    }
-
-    const cfnTable = table.node.defaultChild as dynamodb.CfnTable;
-    if (!cfnTable) {
-      throw new Error('Cannot access CloudFormation resource for table');
     }
 
     return cfnTable;

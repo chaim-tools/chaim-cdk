@@ -17,6 +17,14 @@ import {
   DEFAULT_CHAIM_API_BASE_URL,
   DEFAULT_MAX_SNAPSHOT_BYTES,
 } from '../config/chaim-endpoints';
+import {
+  normalizeAccountId,
+  normalizeRegion,
+  normalizeResourceName,
+  getSnapshotDir,
+  getLocalSnapshotPath,
+  ensureDirExists,
+} from '../services/os-cache-paths';
 
 /**
  * Path to the canonical Lambda handler file.
@@ -75,14 +83,26 @@ export abstract class BaseChaimBinder extends Construct {
     // Generate resource ID
     this.resourceId = `${resourceName}__${entityName}`;
 
+    // Normalize values for paths (handle CDK tokens)
+    const normalizedAccountId = normalizeAccountId(stack.account);
+    const normalizedRegion = normalizeRegion(stack.region);
+    const normalizedResourceName = normalizeResourceName(resourceName);
+
+    // Update resource ID with normalized name to avoid special characters
+    const normalizedResourceId = `${normalizedResourceName}__${entityName}`;
+
     // Build LOCAL snapshot payload
     const localSnapshot = this.buildLocalSnapshot({
-      accountId: stack.account,
-      region: stack.region,
+      accountId: normalizedAccountId,
+      region: normalizedRegion,
       stackName,
       datastoreType,
-      resourceName,
+      resourceName: normalizedResourceName,
+      resourceId: normalizedResourceId,
     });
+
+    // Write LOCAL snapshot to OS cache for chaim-cli consumption
+    this.writeLocalSnapshotToDisk(localSnapshot);
 
     // Get or create asset directory
     const assetDir = this.writeSnapshotAsset(localSnapshot, stackName);
@@ -152,6 +172,7 @@ export abstract class BaseChaimBinder extends Construct {
     stackName: string;
     datastoreType: string;
     resourceName: string;
+    resourceId: string;
   }): LocalSnapshotPayload {
     const capturedAt = new Date().toISOString();
 
@@ -162,7 +183,7 @@ export abstract class BaseChaimBinder extends Construct {
       stackName: params.stackName,
       datastoreType: params.datastoreType,
       resourceName: params.resourceName,
-      resourceId: this.resourceId,
+      resourceId: params.resourceId,
       appId: this.baseProps.appId,
       schema: this.schemaData,
       dataStore: this.dataStoreMetadata,
@@ -172,13 +193,35 @@ export abstract class BaseChaimBinder extends Construct {
   }
 
   /**
-   * Ensure directory exists, creating it if necessary.
+   * Write LOCAL snapshot to OS cache for chaim-cli consumption.
+   * Uses hierarchical path: aws/{accountId}/{region}/{stackName}/{datastoreType}/{resourceId}.json
+   * 
+   * @param snapshot - The snapshot payload to write
+   * @returns The path where snapshot was written
    */
-  private ensureDirExists(dir: string): void {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+  private writeLocalSnapshotToDisk(snapshot: LocalSnapshotPayload): string {
+    const dir = getSnapshotDir({
+      accountId: snapshot.accountId,
+      region: snapshot.region,
+      stackName: snapshot.stackName,
+      datastoreType: snapshot.datastoreType,
+    });
+    
+    ensureDirExists(dir);
+    
+    const filePath = getLocalSnapshotPath({
+      accountId: snapshot.accountId,
+      region: snapshot.region,
+      stackName: snapshot.stackName,
+      datastoreType: snapshot.datastoreType,
+      resourceId: snapshot.resourceId,
+    });
+    
+    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+    
+    return filePath;
   }
+
 
   /**
    * Find the CDK project root by walking up from current module.
@@ -214,7 +257,7 @@ export abstract class BaseChaimBinder extends Construct {
   private writeSnapshotAsset(snapshot: LocalSnapshotPayload, stackName: string): string {
     const cdkRoot = this.findCdkProjectRoot();
     const assetDir = path.join(cdkRoot, 'cdk.out', 'chaim', 'assets', stackName, this.resourceId);
-    this.ensureDirExists(assetDir);
+    ensureDirExists(assetDir);
 
     // Write snapshot.json (OVERWRITE each synth)
     const snapshotPath = path.join(assetDir, 'snapshot.json');
