@@ -26,12 +26,8 @@ describe('IngestionService', () => {
       expect(INGESTION_ENDPOINTS).toEqual(CHAIM_ENDPOINTS);
     });
 
-    it('should have UPLOAD_URL endpoint', () => {
-      expect(INGESTION_ENDPOINTS.UPLOAD_URL).toBe('/ingest/upload-url');
-    });
-
-    it('should have SNAPSHOT_REF endpoint', () => {
-      expect(INGESTION_ENDPOINTS.SNAPSHOT_REF).toBe('/ingest/snapshot-ref');
+    it('should have PRESIGN endpoint', () => {
+      expect(INGESTION_ENDPOINTS.PRESIGN).toBe('/ingest/presign');
     });
   });
 
@@ -84,19 +80,14 @@ describe('IngestionService', () => {
   });
 
   describe('buildUrl', () => {
-    it('should build upload URL with default base', () => {
-      const url = IngestionService.buildUrl('UPLOAD_URL');
-      expect(url).toBe('https://api.chaim.co/ingest/upload-url');
-    });
-
-    it('should build snapshot-ref URL with default base', () => {
-      const url = IngestionService.buildUrl('SNAPSHOT_REF');
-      expect(url).toBe('https://api.chaim.co/ingest/snapshot-ref');
+    it('should build presign URL with default base', () => {
+      const url = IngestionService.buildUrl('PRESIGN');
+      expect(url).toBe('https://api.chaim.co/ingest/presign');
     });
 
     it('should use custom base URL when provided', () => {
-      const url = IngestionService.buildUrl('UPLOAD_URL', 'https://custom.api.example.com');
-      expect(url).toBe('https://custom.api.example.com/ingest/upload-url');
+      const url = IngestionService.buildUrl('PRESIGN', 'https://custom.api.example.com');
+      expect(url).toBe('https://custom.api.example.com/ingest/presign');
     });
   });
 

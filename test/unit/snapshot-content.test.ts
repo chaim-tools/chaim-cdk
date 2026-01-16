@@ -12,21 +12,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
+import { TableBindingConfig } from '../../src/types/table-binding-config';
 
 // Mock schema data for testing
 const mockSchemaData = {
   schemaVersion: '1.0.0',
-  namespace: 'test.users',
+  entityName: 'User',
   description: 'Test user schema',
-  entity: {
-    name: 'User',
-    primaryKey: { partitionKey: 'userId' },
-    fields: [
-      { name: 'userId', type: 'string', required: true },
-      { name: 'email', type: 'string', required: true },
-      { name: 'createdAt', type: 'number' },
-    ],
-  },
+  primaryKey: { partitionKey: 'userId' },
+  fields: [
+    { name: 'userId', type: 'string', required: true },
+    { name: 'email', type: 'string', required: true },
+    { name: 'createdAt', type: 'number' },
+  ],
 };
 
 // Mock the SchemaService
@@ -40,6 +38,7 @@ describe('Snapshot Content Tests', () => {
   let app: cdk.App;
   let stack: cdk.Stack;
   let table: dynamodb.Table;
+  let testConfig: TableBindingConfig;
   const testAssetDirs: string[] = [];
 
   // Helper to ensure asset directory exists
@@ -74,6 +73,10 @@ describe('Snapshot Content Tests', () => {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
+    testConfig = new TableBindingConfig(
+      'test-app',
+      ChaimCredentials.fromApiKeys('test-key', 'test-secret')
+    );
   });
 
   afterEach(() => {
@@ -98,8 +101,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.resourceId).toContain('__User');
@@ -111,12 +113,11 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.schemaData).toBeDefined();
-      expect(binder.schemaData.namespace).toBe(mockSchemaData.namespace);
+      expect(binder.schemaData.entityName).toBe(mockSchemaData.entityName);
     });
 
     it('should expose dynamoDBMetadata with type', () => {
@@ -125,8 +126,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata).toBeDefined();
@@ -139,12 +139,26 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.localSnapshotPath).toBeDefined();
       expect(binder.localSnapshotPath).toContain('User');
+    });
+
+    it('should generate snapshot with action field set to UPSERT', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      expect(snapshot).toBeDefined();
+      expect(snapshot.action).toBe('UPSERT');
     });
   });
 
@@ -155,8 +169,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.partitionKey).toBe('pk');
@@ -174,8 +187,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'CompositeBinder', {
         schemaPath: './schemas/test.bprint',
         table: compositeTable,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.partitionKey).toBe('pk');
@@ -188,8 +200,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.billingMode).toBe('PAY_PER_REQUEST');
@@ -201,8 +212,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.arn).toBeDefined();
@@ -215,8 +225,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.tableName).toBeDefined();
@@ -230,8 +239,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -246,8 +254,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -261,8 +268,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -276,8 +282,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -288,11 +293,15 @@ describe('Snapshot Content Tests', () => {
     it('should write snapshot with appId', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
+      const customConfig = new TableBindingConfig(
+        'my-custom-app',
+        ChaimCredentials.fromApiKeys('test-key', 'test-secret')
+      );
+      
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'my-custom-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: customConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -306,8 +315,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -321,16 +329,15 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
       
       expect(snapshot.schema).toBeDefined();
-      expect(snapshot.schema.namespace).toBe(mockSchemaData.namespace);
-      expect(snapshot.schema.entity).toBeDefined();
-      expect(snapshot.schema.entity.name).toBe('User');
+      expect(snapshot.schema.entityName).toBe('User');
+      expect(snapshot.schema.primaryKey).toBeDefined();
+      expect(snapshot.schema.fields).toBeDefined();
     });
 
     it('should write snapshot with dataStore metadata', () => {
@@ -339,8 +346,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -356,8 +362,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -374,8 +379,7 @@ describe('Snapshot Content Tests', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);
@@ -384,14 +388,27 @@ describe('Snapshot Content Tests', () => {
       expect(() => new Date(snapshot.capturedAt)).not.toThrow();
     });
 
+    it('should write snapshot with schemaVersion', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      expect(snapshot.schemaVersion).toBe('1.0');
+    });
+
     it('should write snapshot with identity for stable collision handling', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const snapshot = getSnapshotFromBinder(binder);

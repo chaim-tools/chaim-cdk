@@ -8,11 +8,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
-import { BaseBinderProps, validateCredentials } from '../types/base-binder-props';
+import { BaseBinderProps, validateBinderProps } from '../types/base-binder-props';
 import { DataStoreMetadata } from '../types/data-store-metadata';
 import { LocalSnapshotPayload, StackContext } from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
 import { FailureMode } from '../types/failure-mode';
+import { TableBindingConfig } from '../types/table-binding-config';
 import { ensureDirExists } from '../services/os-cache-paths';
 import { getChaimAssetDir } from '../services/cdk-project-root';
 import {
@@ -29,6 +30,7 @@ import {
 import {
   DEFAULT_CHAIM_API_BASE_URL,
   DEFAULT_MAX_SNAPSHOT_BYTES,
+  SNAPSHOT_SCHEMA_VERSION,
 } from '../config/chaim-endpoints';
 
 /**
@@ -62,16 +64,23 @@ export abstract class BaseChaimBinder extends Construct {
   /** Path to the LOCAL snapshot file written during synth */
   public readonly localSnapshotPath: string;
 
-  /** Base props (credentials, appId, etc.) */
+  /** Binding configuration */
+  public readonly config: TableBindingConfig;
+
+  /** Base props (for internal use) */
   protected readonly baseProps: BaseBinderProps;
 
   constructor(scope: Construct, id: string, props: BaseBinderProps) {
     super(scope, id);
 
     this.baseProps = props;
+    this.config = props.config;
 
-    // Validate credentials
-    validateCredentials(props);
+    // Validate props
+    validateBinderProps(props);
+
+    // Validate consistency with other bindings to same table
+    this.validateTableConsistency();
 
     // Load and validate schema
     this.schemaData = SchemaService.readSchema(props.schemaPath);
@@ -93,7 +102,7 @@ export abstract class BaseChaimBinder extends Construct {
     // Build stable identity for collision detection
     const stableResourceKey = this.computeStableResourceKey();
     const identity: StableIdentity = {
-      appId: props.appId,
+      appId: this.config.appId,
       stackName,
       datastoreType,
       entityName,
@@ -123,6 +132,80 @@ export abstract class BaseChaimBinder extends Construct {
 
     // Deploy Lambda-backed custom resource for ingestion
     this.deployIngestionResources(assetDir);
+  }
+
+  /**
+   * Validate that all bindings to the same table use the same config.
+   * 
+   * This is a safety check - sharing the same TableBindingConfig object
+   * already ensures consistency, but this catches cases where users
+   * create separate configs with identical values.
+   */
+  private validateTableConsistency(): void {
+    // Only for DynamoDB binders (has table property)
+    const table = (this.baseProps as any).table;
+    if (!table) {
+      return;
+    }
+
+    // Find other binders for the same table
+    const stack = cdk.Stack.of(this);
+    const otherBinders = stack.node.findAll()
+      .filter(node => node instanceof BaseChaimBinder)
+      .filter(binder => binder !== this)
+      .filter(binder => {
+        const otherTable = ((binder as BaseChaimBinder).baseProps as any).table;
+        return otherTable === table;
+      })
+      .map(binder => binder as BaseChaimBinder);
+
+    if (otherBinders.length === 0) {
+      return; // First binding for this table
+    }
+
+    const firstBinder = otherBinders[0];
+
+    // Check if they're using the exact same config object (recommended)
+    if (this.config === firstBinder.config) {
+      return; // Perfect - same config object
+    }
+
+    // Different config objects - validate they have same values
+    if (this.config.appId !== firstBinder.config.appId) {
+      throw new Error(
+        `Configuration conflict for table "${table.tableName}".\n\n` +
+        `Binder "${firstBinder.node.id}" uses appId: "${firstBinder.config.appId}"\n` +
+        `Binder "${this.node.id}" uses appId: "${this.config.appId}"\n\n` +
+        `All bindings to the same table MUST use the same appId.\n\n` +
+        `RECOMMENDED: Share the same TableBindingConfig object:\n` +
+        `  const config = new TableBindingConfig('${firstBinder.config.appId}', credentials);\n` +
+        `  new ChaimDynamoDBBinder(this, '${firstBinder.node.id}', { ..., config });\n` +
+        `  new ChaimDynamoDBBinder(this, '${this.node.id}', { ..., config });`
+      );
+    }
+
+    // Validate credentials match
+    const firstCreds = JSON.stringify(firstBinder.config.credentials);
+    const thisCreds = JSON.stringify(this.config.credentials);
+    
+    if (firstCreds !== thisCreds) {
+      throw new Error(
+        `Configuration conflict for table "${table.tableName}".\n\n` +
+        `Binder "${firstBinder.node.id}" uses different credentials than "${this.node.id}".\n\n` +
+        `All bindings to the same table MUST use the same credentials.\n\n` +
+        `RECOMMENDED: Share the same TableBindingConfig object to avoid this error.`
+      );
+    }
+
+    // Warn about different failureMode (not an error)
+    if (this.config.failureMode !== firstBinder.config.failureMode) {
+      console.warn(
+        `Warning: Different failureMode for table "${table.tableName}".\n` +
+        `  "${firstBinder.node.id}": ${firstBinder.config.failureMode}\n` +
+        `  "${this.node.id}": ${this.config.failureMode}\n` +
+        `Consider sharing the same TableBindingConfig object.`
+      );
+    }
   }
 
   /**
@@ -182,22 +265,9 @@ export abstract class BaseChaimBinder extends Construct {
 
   /**
    * Get the entity name from schema.
-   * Falls back to deriving from namespace if entity.name is not present.
-   * Example: namespace "com.example.users" → "Users"
    */
   private getEntityName(): string {
-    // Check if entity has a name property (extended schema)
-    const entity = this.schemaData.entity as any;
-    if (entity?.name) {
-      return entity.name;
-    }
-
-    // Fallback: derive from namespace
-    // e.g., "com.example.users" → "Users"
-    const namespace = this.schemaData.namespace;
-    const parts = namespace.split('.');
-    const lastPart = parts[parts.length - 1];
-    return lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+    return this.schemaData.entityName;
   }
 
   /**
@@ -228,6 +298,8 @@ export abstract class BaseChaimBinder extends Construct {
     const capturedAt = new Date().toISOString();
 
     return {
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      action: 'UPSERT', // Normal operation - create or update entity
       provider: 'aws',
       accountId: params.accountId,
       region: params.region,
@@ -236,7 +308,7 @@ export abstract class BaseChaimBinder extends Construct {
       resourceName: params.resourceName,
       resourceId: this.resourceId,
       identity: params.identity,
-      appId: this.baseProps.appId,
+      appId: this.config.appId,
       schema: this.schemaData,
       dataStore: this.dataStoreMetadata,
       context: this.buildStackContext(),
@@ -330,7 +402,7 @@ export abstract class BaseChaimBinder extends Construct {
     );
 
     // Grant Secrets Manager permissions if using secrets
-    const { credentials } = this.baseProps;
+    const { credentials } = this.config;
     if (credentials.credentialType === 'secretsManager' && credentials.secretName) {
       handler.addToRolePolicy(
         new iam.PolicyStatement({
@@ -349,14 +421,13 @@ export abstract class BaseChaimBinder extends Construct {
    * Note: Snapshot is NOT passed via env - Lambda reads from bundled asset.
    */
   private buildLambdaEnvironment(): Record<string, string> {
-    const { credentials } = this.baseProps;
-
     // Allow maintainer override via CDK context, otherwise use default
     const apiBaseUrl = this.node.tryGetContext('chaimApiBaseUrl') ?? DEFAULT_CHAIM_API_BASE_URL;
+    const { credentials, failureMode } = this.config;
 
     const env: Record<string, string> = {
-      APP_ID: this.baseProps.appId,
-      FAILURE_MODE: this.baseProps.failureMode ?? FailureMode.BEST_EFFORT,
+      APP_ID: this.config.appId,
+      FAILURE_MODE: failureMode,
       CHAIM_API_BASE_URL: apiBaseUrl,
       CHAIM_MAX_SNAPSHOT_BYTES: String(DEFAULT_MAX_SNAPSHOT_BYTES),
     };

@@ -16,8 +16,11 @@ export { FailureMode } from './types/failure-mode';
 // Type exports
 export {
   BaseBinderProps,
-  validateCredentials,
+  validateBinderProps,
 } from './types/base-binder-props';
+
+// Binding configuration
+export { TableBindingConfig } from './types/table-binding-config';
 
 export {
   BaseDataStoreMetadata,
@@ -53,6 +56,7 @@ export {
   CHAIM_ENDPOINTS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_MAX_SNAPSHOT_BYTES,
+  SNAPSHOT_SCHEMA_VERSION,
 } from './config/chaim-endpoints';
 
 // OS cache utilities

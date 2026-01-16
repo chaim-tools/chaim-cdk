@@ -3,6 +3,18 @@ import { DataStoreMetadata } from './data-store-metadata';
 import { StableIdentity } from '../services/stable-identity';
 
 /**
+ * Snapshot payload types for Chaim CDK.
+ * 
+ * ⚠️ CONTRACT: These types define the structure of snapshot files consumed by:
+ * - chaim-ingest-service (Java): com.chaim.ingest.model.SnapshotPayload
+ * 
+ * When modifying these types:
+ * 1. For additive/optional changes: bump minor version (1.0 → 1.1)
+ * 2. For breaking changes: bump major version (1.x → 2.0)
+ * 3. Coordinate with chaim-ingest-service to add version handling
+ */
+
+/**
  * Stack context captured during CDK synthesis.
  */
 export interface StackContext {
@@ -29,6 +41,27 @@ export interface StackContext {
  * at deploy-time by the Lambda handler.
  */
 export interface LocalSnapshotPayload {
+  /**
+   * Schema version for backward compatibility.
+   * The chaim-ingest-service uses this to parse different payload versions.
+   * 
+   * Versioning strategy:
+   * - Minor bump (1.0 → 1.1): Additive, optional field changes
+   * - Major bump (1.x → 2.0): Breaking changes (removed/renamed/required fields)
+   * 
+   * @contract chaim-ingest-service: com.chaim.ingest.model.SnapshotPayload
+   */
+  readonly schemaVersion: '1.0';
+
+  /**
+   * Action type for this snapshot.
+   * - UPSERT: Create or update entity metadata (default)
+   * - DELETE: Mark entity as deleted
+   * 
+   * If omitted, defaults to 'UPSERT' for backward compatibility.
+   */
+  readonly action?: 'UPSERT' | 'DELETE';
+
   /** Cloud provider */
   readonly provider: 'aws';
 
@@ -56,8 +89,8 @@ export interface LocalSnapshotPayload {
   /** Application ID from ChaimBinder props */
   readonly appId: string;
 
-  /** Validated .bprint schema data */
-  readonly schema: SchemaData;
+  /** Validated .bprint schema data (null for DELETE actions) */
+  readonly schema: SchemaData | null;
 
   /** Data store metadata (DynamoDB, Aurora, etc.) */
   readonly dataStore: DataStoreMetadata;

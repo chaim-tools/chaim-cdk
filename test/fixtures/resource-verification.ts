@@ -91,20 +91,17 @@ export function parseSchemaDataOutput(schemaDataJson: string): SchemaData {
     if (!schemaData.schemaVersion) {
       throw new Error('SchemaData missing schemaVersion');
     }
-    if (!schemaData.namespace) {
-      throw new Error('SchemaData missing namespace');
+    if (!schemaData.entityName) {
+      throw new Error('SchemaData missing entityName');
     }
     if (!schemaData.description) {
       throw new Error('SchemaData missing description');
     }
-    if (!schemaData.entity) {
-      throw new Error('SchemaData missing entity');
+    if (!schemaData.primaryKey) {
+      throw new Error('SchemaData missing primaryKey');
     }
-    if (!schemaData.entity.primaryKey) {
-      throw new Error('SchemaData entity missing primaryKey');
-    }
-    if (!schemaData.entity.fields || !Array.isArray(schemaData.entity.fields)) {
-      throw new Error('SchemaData entity missing fields array');
+    if (!schemaData.fields || !Array.isArray(schemaData.fields)) {
+      throw new Error('SchemaData missing fields array');
     }
     
     return schemaData as SchemaData;

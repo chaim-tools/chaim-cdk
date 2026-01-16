@@ -4,6 +4,8 @@ import { Construct } from 'constructs';
 import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimDynamoDBBinderProps } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials, IChaimCredentials } from '../../src/types/credentials';
+import { TableBindingConfig } from '../../src/types/table-binding-config';
+import { FailureMode } from '../../src/types/failure-mode';
 
 /**
  * Options for creating a test stack
@@ -45,12 +47,8 @@ export interface ChaimBinderOptions {
   schemaPath: string;
   /** DynamoDB table */
   table: dynamodb.ITable;
-  /** Application ID */
-  appId: string;
-  /** Credentials (use ChaimCredentials factory) */
-  credentials: IChaimCredentials;
-  /** Failure mode */
-  failureMode?: 'BEST_EFFORT' | 'STRICT';
+  /** Binding configuration */
+  config: TableBindingConfig;
 }
 
 /**
@@ -107,23 +105,28 @@ export function createTestTable(
  * Creates a ChaimDynamoDBBinder construct with direct API credentials
  *
  * @param scope - The construct scope (usually a Stack)
- * @param options - ChaimBinder creation options (without credentials)
+ * @param options - ChaimBinder creation options (without config)
  * @param apiKey - API key
  * @param apiSecret - API secret
+ * @param appId - Application ID (default: 'test-app')
  * @returns The created ChaimDynamoDBBinder construct
  */
 export function createChaimBinderWithApiKeys(
   scope: Construct,
-  options: Omit<ChaimBinderOptions, 'credentials'>,
+  options: Omit<ChaimBinderOptions, 'config'>,
   apiKey: string,
-  apiSecret: string
+  apiSecret: string,
+  appId: string = 'test-app'
 ): ChaimDynamoDBBinder {
+  const config = new TableBindingConfig(
+    appId,
+    ChaimCredentials.fromApiKeys(apiKey, apiSecret)
+  );
+
   const props: ChaimDynamoDBBinderProps = {
     schemaPath: options.schemaPath,
     table: options.table,
-    appId: options.appId,
-    credentials: ChaimCredentials.fromApiKeys(apiKey, apiSecret),
-    failureMode: options.failureMode,
+    config,
   };
 
   return new ChaimDynamoDBBinder(scope, options.id || 'TestChaimBinder', props);
@@ -133,24 +136,43 @@ export function createChaimBinderWithApiKeys(
  * Creates a ChaimDynamoDBBinder construct with Secrets Manager credentials
  *
  * @param scope - The construct scope (usually a Stack)
- * @param options - ChaimBinder creation options (without credentials)
+ * @param options - ChaimBinder creation options (without config)
  * @param secretName - Secrets Manager secret name
+ * @param appId - Application ID (default: 'test-app')
  * @returns The created ChaimDynamoDBBinder construct
  */
 export function createChaimBinderWithSecretsManager(
   scope: Construct,
-  options: Omit<ChaimBinderOptions, 'credentials'>,
-  secretName: string
+  options: Omit<ChaimBinderOptions, 'config'>,
+  secretName: string,
+  appId: string = 'test-app'
 ): ChaimDynamoDBBinder {
+  const config = new TableBindingConfig(
+    appId,
+    ChaimCredentials.fromSecretsManager(secretName)
+  );
+
   const props: ChaimDynamoDBBinderProps = {
     schemaPath: options.schemaPath,
     table: options.table,
-    appId: options.appId,
-    credentials: ChaimCredentials.fromSecretsManager(secretName),
-    failureMode: options.failureMode,
+    config,
   };
 
   return new ChaimDynamoDBBinder(scope, options.id || 'TestChaimBinder', props);
+}
+
+/**
+ * Creates a TableBindingConfig for testing
+ */
+export function createTestTableConfig(
+  appId: string = 'test-app',
+  apiKey: string = 'test-api-key',
+  apiSecret: string = 'test-api-secret'
+): TableBindingConfig {
+  return new TableBindingConfig(
+    appId,
+    ChaimCredentials.fromApiKeys(apiKey, apiSecret)
+  );
 }
 
 /**

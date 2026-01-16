@@ -1,63 +1,45 @@
-import { IChaimCredentials } from './credentials';
-import { FailureMode } from './failure-mode';
+import { TableBindingConfig } from './table-binding-config';
 
 /**
  * Base properties shared by all Chaim data store binders.
- *
- * All binders require Chaim SaaS credentials for ingestion.
  */
 export interface BaseBinderProps {
   /** Path to the .bprint schema file (JSON format) */
-  schemaPath: string;
+  readonly schemaPath: string;
 
-  /** Application ID for Chaim SaaS platform */
-  appId: string;
-
-  /**
-   * Chaim API credentials.
-   *
-   * Use `ChaimCredentials.fromSecretsManager()` for production deployments,
-   * or `ChaimCredentials.fromApiKeys()` for development/testing.
-   *
+  /** 
+   * Binding configuration (appId, credentials, failureMode).
+   * 
+   * For single-table design, create one config and share across all entity bindings.
+   * 
    * @example
    * ```typescript
-   * // Secrets Manager (recommended)
-   * credentials: ChaimCredentials.fromSecretsManager('chaim/api-credentials')
-   *
-   * // Direct API keys
-   * credentials: ChaimCredentials.fromApiKeys(apiKey, apiSecret)
+   * const config = new TableBindingConfig(
+   *   'my-app',
+   *   ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+   * );
+   * 
+   * new ChaimDynamoDBBinder(this, 'UserBinding', {
+   *   schemaPath: './schemas/user.bprint',
+   *   table: usersTable,
+   *   config,
+   * });
    * ```
    */
-  credentials: IChaimCredentials;
-
-  /**
-   * Behavior when ingestion fails.
-   * @default FailureMode.BEST_EFFORT
-   */
-  failureMode?: FailureMode;
+  readonly config: TableBindingConfig;
 }
 
 /**
- * Validates that credentials are properly configured.
+ * Validate binder props.
  */
-export function validateCredentials(props: BaseBinderProps): void {
-  if (!props.credentials) {
-    throw new Error(
-      'Chaim SaaS credentials required. Use ChaimCredentials.fromSecretsManager() or ChaimCredentials.fromApiKeys().'
-    );
+export function validateBinderProps(props: BaseBinderProps): void {
+  if (!props.schemaPath || props.schemaPath.trim() === '') {
+    throw new Error('schemaPath is required and cannot be empty');
   }
 
-  const { credentialType } = props.credentials;
-
-  if (credentialType === 'secretsManager') {
-    if (!props.credentials.secretName) {
-      throw new Error('secretName is required for Secrets Manager credentials.');
-    }
-  } else if (credentialType === 'direct') {
-    if (!props.credentials.apiKey || !props.credentials.apiSecret) {
-      throw new Error('apiKey and apiSecret are required for direct credentials.');
-    }
-  } else {
-    throw new Error(`Unknown credential type: ${credentialType}`);
+  if (!props.config) {
+    throw new Error('config is required. Create a TableBindingConfig with your appId and credentials.');
   }
+
+  // TableBindingConfig validates itself in its constructor
 }

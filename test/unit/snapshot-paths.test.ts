@@ -168,7 +168,7 @@ describe('snapshot-paths', () => {
     // which makes it difficult to mock in isolation. The actual functionality is tested
     // through integration tests.
     it.skip('should write snapshot JSON to correct path', () => {
-      const snapshot = { provider: 'aws', appId: 'test' };
+      const snapshot = { schemaVersion: '1.0', provider: 'aws', appId: 'test' };
       const params = {
         accountId: '123456789012',
         region: 'us-east-1',

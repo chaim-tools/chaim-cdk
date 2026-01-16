@@ -13,7 +13,7 @@ pnpm add @chaim-tools/cdk-lib
 ## Quick Start
 
 ```typescript
-import { ChaimDynamoDBBinder, ChaimCredentials, FailureMode } from '@chaim-tools/cdk-lib';
+import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig } from '@chaim-tools/cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 
 // Create a DynamoDB table
@@ -22,24 +22,17 @@ const usersTable = new dynamodb.Table(this, 'Users', {
   billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
 });
 
-// Bind it to a schema using Secrets Manager for credentials (recommended)
-new ChaimDynamoDBBinder(this, 'UsersBinding', {
-  schemaPath: './schemas/users.bprint',
-  table: usersTable,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
-});
+// Create binding configuration
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+);
 
-// Or use direct credentials for development/testing
+// Bind schema to table
 new ChaimDynamoDBBinder(this, 'UsersBinding', {
   schemaPath: './schemas/users.bprint',
   table: usersTable,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromApiKeys(
-    process.env.CHAIM_API_KEY!,
-    process.env.CHAIM_API_SECRET!
-  ),
-  failureMode: FailureMode.STRICT,  // Optional - rolls back on failure
+  config,
 });
 ```
 
@@ -55,9 +48,31 @@ Construct that binds a DynamoDB table to a Chaim schema.
 |----------|------|----------|-------------|
 | `schemaPath` | string | Yes | Path to `.bprint` schema file |
 | `table` | `ITable` | Yes | DynamoDB table to bind |
-| `appId` | string | Yes | Application ID for Chaim SaaS |
-| `credentials` | `IChaimCredentials` | Yes | API credentials (use `ChaimCredentials` factory) |
-| `failureMode` | `FailureMode` | No | Default: `BEST_EFFORT` |
+| `config` | `TableBindingConfig` | Yes | Binding configuration (appId, credentials, failureMode) |
+
+### `TableBindingConfig`
+
+Configuration for entity bindings. For single-table design, create one config and share across all entity bindings.
+
+```typescript
+// Create config with Secrets Manager (recommended for production)
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+);
+
+// Or with direct API keys (for development)
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromApiKeys(apiKey, apiSecret),
+  FailureMode.STRICT  // Optional - defaults to BEST_EFFORT
+);
+```
+
+**Constructor Parameters:**
+- `appId` (string) - Application ID for the Chaim platform
+- `credentials` (IChaimCredentials) - API credentials
+- `failureMode` (FailureMode) - Optional, defaults to BEST_EFFORT
 
 ### `ChaimCredentials`
 
@@ -78,28 +93,100 @@ const credentials = ChaimCredentials.fromApiKeys(apiKey, apiSecret);
 | `BEST_EFFORT` (default) | Log errors, return SUCCESS to CloudFormation |
 | `STRICT` | Return FAILED to CloudFormation on any ingestion error |
 
+## Single-Table Design (Multiple Entities)
+
+For single-table design where multiple entity types share one DynamoDB table, create **one** `TableBindingConfig` and share it across all entity bindings:
+
+```typescript
+import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig } from '@chaim-tools/cdk-lib';
+
+const singleTable = new dynamodb.Table(this, 'SingleTable', {
+  partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+  sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+});
+
+// Create config ONCE for the table
+const tableConfig = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+);
+
+// Share config across all entities in the table
+new ChaimDynamoDBBinder(this, 'UserBinding', {
+  schemaPath: './schemas/user.bprint',
+  table: singleTable,
+  config: tableConfig,
+});
+
+new ChaimDynamoDBBinder(this, 'OrderBinding', {
+  schemaPath: './schemas/order.bprint',
+  table: singleTable,
+  config: tableConfig, // Same config!
+});
+
+new ChaimDynamoDBBinder(this, 'ProductBinding', {
+  schemaPath: './schemas/product.bprint',
+  table: singleTable,
+  config: tableConfig, // Same config!
+});
+```
+
+**Why this pattern?**
+
+All entities in the same DynamoDB table must belong to the same application (`appId`) with the same credentials. `TableBindingConfig` enforces this by design:
+
+- Sharing the same config object makes consistency automatic
+- Validation catches accidental misconfigurations (different appIds)
+- Clear intent in your CDK code
+- DRY - define credentials once
+
+**Result:**
+- 3 separate snapshots (one per entity)
+- 3 separate resourceIds: `SingleTable__User`, `SingleTable__Order`, `SingleTable__Product`
+- All with the same `appId` and `credentials`
+- Each entity can be independently created, updated, or deleted
+
 ## How It Works
 
 1. At **synth time**: The construct reads your `.bprint` file, validates it, and writes a snapshot to the CDK asset directory
 2. During **deploy**: CloudFormation invokes the ingestion Lambda in your account
 3. The Lambda:
    - Reads the bundled snapshot from `./snapshot.json`
-   - Generates `eventId` (UUID v4) and `contentHash` (SHA-256)
-   - Requests presigned URL: `POST /ingest/upload-url`
+   - Generates `eventId` (UUID v4), `nonce` (UUID v4), and `contentHash` (SHA-256)
+   - Requests presigned URL: `POST /ingest/presign` with HMAC authentication
    - Uploads snapshot: `PUT <presignedUrl>`
-   - Commits reference: `POST /ingest/snapshot-ref`
 
 ## Ingestion Flow
 
 ```
 Create/Update:
-  1. POST /ingest/upload-url → get presigned S3 URL
-  2. PUT snapshot bytes to presigned URL
-  3. POST /ingest/snapshot-ref with action: 'UPSERT'
-
+  1. POST /ingest/presign with HMAC signature → get presigned S3 URL
+     Request includes: appId, eventId, contentHash, timestamp, nonce
+  2. PUT snapshot bytes to presigned S3 URL
+  
 Delete:
-  1. POST /ingest/snapshot-ref with action: 'DELETE'
+  1. Build DELETE snapshot (action: 'DELETE', schema: null)
+  2. POST /ingest/presign with HMAC signature → get presigned S3 URL
+  3. PUT DELETE snapshot bytes to presigned S3 URL
 ```
+
+## Snapshot Payload
+
+The snapshot payload includes:
+
+**Schema & Identity:**
+- `schemaVersion` - Payload version for backward compatibility (current: 1.0)
+- `.bprint` schema content (entity definitions, field types, constraints)
+- Application ID and resource identifiers
+
+**Infrastructure Metadata:**
+- AWS account ID, region, stack information
+- DynamoDB table configuration (keys, indexes, TTL, streams)
+- CloudFormation context
+
+**Versioning Strategy:**
+- **Minor bump** (1.0 → 1.1): Additive or optional field changes
+- **Major bump** (1.x → 2.0): Breaking changes (removed/renamed/required fields)
 
 ## Configuration
 

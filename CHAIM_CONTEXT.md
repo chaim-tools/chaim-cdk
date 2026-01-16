@@ -67,41 +67,42 @@ flowchart TD
         H --> CFN{CFN Request Type?}
     end
 
-    %% CREATE/UPDATE path (identical flow, both use UPSERT)
+    %% CREATE/UPDATE path (UPSERT flow)
     subgraph UpsertFlow[CREATE / UPDATE Flow]
-        CFN -->|Create or Update| U1[Read full snapshot.json<br/>from bundled asset]
+        CFN -->|Create or Update| U1[Read snapshot.json<br/>from bundled asset]
         U1 --> U2[Generate eventId<br/>compute contentHash]
-        U2 --> U3[POST /ingest/upload-url<br/>get presigned S3 URL]
-        U3 --> U4[PUT snapshot bytes<br/>to presigned URL]
-        U4 --> U5[POST /ingest/snapshot-ref<br/>action: UPSERT]
+        U2 --> U3[POST /ingest/presign<br/>get presigned S3 URL]
+        U3 --> U4[PUT snapshot bytes<br/>to presigned URL<br/>action: UPSERT]
     end
 
-    %% DELETE path
+    %% DELETE path (same presigned upload flow)
     subgraph DeleteFlow[DELETE Flow]
-        CFN -->|Delete| D1[Read minimal metadata<br/>from bundled asset]
-        D1 --> D2[Generate eventId<br/>for delete event]
-        D2 --> D3[POST /ingest/snapshot-ref<br/>action: DELETE]
+        CFN -->|Delete| D1[Read snapshot.json<br/>build DELETE snapshot<br/>action: DELETE, schema: null]
+        D1 --> D2[Generate eventId<br/>compute contentHash]
+        D2 --> D3[POST /ingest/presign<br/>get presigned S3 URL]
+        D3 --> D4[PUT DELETE snapshot bytes<br/>to presigned URL<br/>action: DELETE]
     end
 
     %% SaaS interactions
     subgraph SaaS[Chaim SaaS Platform]
         U3 --> S1[S3 Snapshot storage]
         U4 --> S1
-        U5 --> S2[Binding registry<br/>audit and lineage]
-        D3 --> S2
+        D3 --> S1
+        D4 --> S1
+        S1 --> S2[Binding registry<br/>audit and lineage<br/>processes action field]
     end
 
     %% CFN responses
-    U5 --> R[Respond to CloudFormation<br/>based on FailureMode]
-    D3 --> R
+    U4 --> R[Respond to CloudFormation<br/>based on FailureMode]
+    D4 --> R
 ```
 
 **Data Flow Summary by Operation:**
 
-| Operation | S3 Upload | API Calls | Action |
-|-----------|-----------|-----------|--------|
-| **CREATE / UPDATE** | ✅ Full snapshot | `/ingest/upload-url` → `/ingest/snapshot-ref` | `UPSERT` |
-| **DELETE** | ❌ No upload | `/ingest/snapshot-ref` only | `DELETE` |
+| Operation | S3 Upload | API Calls | Snapshot Action Field |
+|-----------|-----------|-----------|----------------------|
+| **CREATE / UPDATE** | ✅ Full snapshot (with schema) | `/ingest/presign` → PUT to S3 | `action: "UPSERT"` |
+| **DELETE** | ✅ DELETE snapshot (schema: null) | `/ingest/presign` → PUT to S3 | `action: "DELETE"` |
 
 
 ## Scope
@@ -111,9 +112,10 @@ This repository (`chaim-cdk`) is the **AWS CDK (CloudFormation) implementation**
 - It is intentionally **AWS-specific** (DynamoDB, CloudFormation Custom Resource, Secrets Manager, S3 presigned URLs).
 - Other cloud providers and on-prem deployment integrations will live in **separate repositories**.
 - All provider repos must remain **contract-compatible** with the Chaim ingest plane:
-  - POST /ingest/upload-url → PUT snapshot bytes → POST /ingest/snapshot-ref
+  - POST /ingest/presign → PUT snapshot bytes (with action field) to S3
   - resourceId + contentHash deduplication
   - authenticated requests (API key credentials)
+  - Snapshots include `action` field: "UPSERT" or "DELETE"
 
 ---
 
@@ -165,14 +167,18 @@ The ingestion Lambda handler is located at `src/lambda-handler/handler.js`. This
 1. Read snapshot.json from bundled asset
 2. Generate eventId using `crypto.randomUUID()`
 3. Compute contentHash as SHA-256 of snapshot bytes
-4. POST `/ingest/upload-url` → get presigned S3 URL
-5. PUT snapshot bytes to presigned URL
-6. POST `/ingest/snapshot-ref` with action: 'UPSERT'
+4. POST `/ingest/presign` → get presigned S3 URL
+5. PUT snapshot bytes (with `action: "UPSERT"`) to presigned URL
+6. Ingest service processes snapshot from S3 and marks entity as active
 
 **Ingestion Flow (Delete):**
-1. Read minimal metadata from snapshot.json
-2. Generate eventId using `crypto.randomUUID()`
-3. POST `/ingest/snapshot-ref` with action: 'DELETE'
+1. Read snapshot.json from bundled asset
+2. Build DELETE snapshot: set `action: "DELETE"` and `schema: null`
+3. Generate eventId using `crypto.randomUUID()`
+4. Compute contentHash as SHA-256 of DELETE snapshot bytes
+5. POST `/ingest/presign` → get presigned S3 URL
+6. PUT DELETE snapshot bytes to presigned URL
+7. Ingest service processes DELETE snapshot from S3 and marks entity as deleted
 
 ### Extensible Base Class Design
 
@@ -215,12 +221,22 @@ Future extensions (not yet implemented):
 8. Deploy ingestion Lambda + custom resource (uses asset directory)
 
 **During `cdk deploy` (Lambda execution):**
+
+**For Create/Update (UPSERT):**
 1. Lambda reads snapshot from bundled `./snapshot.json`
 2. Generate `eventId` (UUID v4) at runtime
 3. Compute `contentHash` = SHA-256(snapshot bytes)
-4. POST /ingest/upload-url (get presigned URL)
-5. PUT snapshot bytes to presigned URL
-6. POST /ingest/snapshot-ref (commit)
+4. POST /ingest/presign (get presigned URL)
+5. PUT snapshot bytes (with `action: "UPSERT"`) to presigned URL
+6. Respond to CloudFormation based on FailureMode
+
+**For Delete:**
+1. Lambda reads snapshot from bundled `./snapshot.json`
+2. Build DELETE snapshot: set `action: "DELETE"` and `schema: null`
+3. Generate `eventId` (UUID v4) at runtime
+4. Compute `contentHash` = SHA-256(DELETE snapshot bytes)
+5. POST /ingest/presign (get presigned URL)
+6. PUT DELETE snapshot bytes to presigned URL
 7. Respond to CloudFormation based on FailureMode
 
 ---
@@ -243,8 +259,9 @@ export const DEFAULT_CHAIM_API_BASE_URL = 'https://api.chaim.co';
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/ingest/upload-url` | POST | Request presigned S3 upload URL |
-| `/ingest/snapshot-ref` | POST | Commit snapshot reference (UPSERT or DELETE) |
+| `/ingest/presign` | POST | Request presigned S3 upload URL for both UPSERT and DELETE snapshots |
+
+**Note**: Both UPSERT and DELETE operations use the same presigned upload flow. The `action` field in the snapshot payload determines whether the entity is created/updated or marked as deleted.
 
 ---
 
@@ -290,7 +307,7 @@ This directory is discovered by walking up from the module to find `cdk.json`, n
 CDK construct for binding a `.bprint` schema to a DynamoDB table and publishing to Chaim SaaS.
 
 ```typescript
-import { ChaimDynamoDBBinder, ChaimCredentials, FailureMode } from '@chaim-tools/cdk-lib';
+import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig, FailureMode } from '@chaim-tools/cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 
 const table = new dynamodb.Table(this, 'UsersTable', {
@@ -298,25 +315,71 @@ const table = new dynamodb.Table(this, 'UsersTable', {
 });
 
 // Using Secrets Manager - failureMode defaults to BEST_EFFORT
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+);
+
 new ChaimDynamoDBBinder(this, 'UserSchema', {
   schemaPath: './schemas/user.bprint',
   table,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
+  config,
 });
 
 // Using direct credentials with STRICT mode (rolls back on failure)
-new ChaimDynamoDBBinder(this, 'UserSchema', {
-  schemaPath: './schemas/user.bprint',
-  table,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromApiKeys(
+const strictConfig = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromApiKeys(
     process.env.CHAIM_API_KEY!,
     process.env.CHAIM_API_SECRET!
   ),
-  failureMode: FailureMode.STRICT,
+  FailureMode.STRICT
+);
+
+new ChaimDynamoDBBinder(this, 'UserSchema', {
+  schemaPath: './schemas/user.bprint',
+  table,
+  config: strictConfig,
 });
 ```
+
+### Single-Table Design Pattern
+
+For single-table design with multiple entities, create **one** `TableBindingConfig` and share it:
+
+```typescript
+const singleTable = new dynamodb.Table(this, 'SingleTable', {
+  partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+  sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+});
+
+// Create config ONCE for the table
+const tableConfig = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/api-credentials')
+);
+
+// Share config across all entities in the table
+new ChaimDynamoDBBinder(this, 'UserBinding', {
+  schemaPath: './schemas/user.bprint',
+  table: singleTable,
+  config: tableConfig,  // Same config
+});
+
+new ChaimDynamoDBBinder(this, 'OrderBinding', {
+  schemaPath: './schemas/order.bprint',
+  table: singleTable,
+  config: tableConfig,  // Same config
+});
+
+new ChaimDynamoDBBinder(this, 'ProductBinding', {
+  schemaPath: './schemas/product.bprint',
+  table: singleTable,
+  config: tableConfig,  // Same config
+});
+```
+
+**Validation:** The construct validates that all bindings to the same table use the same `appId` and `credentials`. This ensures consistency at the Chaim platform level.
 
 ### ChaimDynamoDBBinderProps
 
@@ -324,9 +387,25 @@ new ChaimDynamoDBBinder(this, 'UserSchema', {
 |----------|------|----------|-------------|
 | `schemaPath` | string | Yes | Path to `.bprint` schema file |
 | `table` | `ITable` | Yes | DynamoDB table to bind |
-| `appId` | string | Yes | Application ID for Chaim SaaS |
-| `credentials` | `IChaimCredentials` | Yes | API credentials (use `ChaimCredentials` factory) |
-| `failureMode` | `FailureMode` | No | Default: `BEST_EFFORT` |
+| `config` | `TableBindingConfig` | Yes | Binding configuration (appId, credentials, failureMode) |
+
+### TableBindingConfig
+
+Configuration object that encapsulates binding settings.
+
+**Constructor:**
+```typescript
+new TableBindingConfig(
+  appId: string,
+  credentials: IChaimCredentials,
+  failureMode?: FailureMode  // defaults to BEST_EFFORT
+)
+```
+
+**Properties:**
+- `appId` (readonly) - Application ID for Chaim SaaS
+- `credentials` (readonly) - API credentials
+- `failureMode` (readonly) - Failure handling mode
 
 ---
 
@@ -365,12 +444,100 @@ chaim generate --snapshot-dir /custom/path --package com.example.model
 
 ---
 
+## Snapshot Actions
+
+Snapshots support two action types through the `action` field in `LocalSnapshotPayload`:
+
+| Action | Description | Use Case | Schema Field |
+|--------|-------------|----------|--------------|
+| `UPSERT` | Create or update entity metadata | ChaimBinder added or updated | Full schema included |
+| `DELETE` | Mark entity as deleted | ChaimBinder removed from stack | `schema: null` |
+
+### UPSERT Snapshot Example
+
+```json
+{
+  "schemaVersion": "1.0",
+  "action": "UPSERT",
+  "provider": "aws",
+  "accountId": "123456789012",
+  "resourceId": "customer__Payment",
+  "datastoreType": "dynamodb",
+  "schema": {
+    "schemaVersion": 1.0,
+    "entityName": "Payment",
+    "description": "Payment transaction records",
+    "primaryKey": { "partitionKey": "paymentId" },
+    "fields": [...]
+  },
+  "dataStore": {
+    "type": "dynamodb",
+    "tableName": "CustomerTable",
+    "tableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/CustomerTable",
+    "partitionKey": "pk"
+  },
+  "capturedAt": "2026-01-15T14:30:00Z"
+}
+```
+
+### DELETE Snapshot Example
+
+```json
+{
+  "schemaVersion": "1.0",
+  "action": "DELETE",
+  "provider": "aws",
+  "accountId": "123456789012",
+  "resourceId": "customer__Payment",
+  "datastoreType": "dynamodb",
+  "schema": null,
+  "dataStore": {
+    "type": "dynamodb",
+    "tableName": "CustomerTable",
+    "tableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/CustomerTable",
+    "partitionKey": "pk"
+  },
+  "capturedAt": "2026-01-15T20:45:00Z"
+}
+```
+
+### Key Differences
+
+- **DELETE snapshots** have `action: "DELETE"`
+- **Schema is null** for DELETE (not needed for deletion)
+- All **identifying fields** must be present (appId, resourceId, provider, accountId, region, stackName, datastoreType)
+- **dataStore metadata** is included (for audit trail)
+- Result: Entity marked as `state: "deleted"` in resource-metadata table
+
+### Entity-Level Deletion
+
+The system tracks **entities** (schemas) within resources (tables). Each entity gets its own metadata record:
+
+**Single entity removal:**
+- Remove one ChaimBinder from CDK code
+- CloudFormation sends DELETE event for that custom resource
+- Lambda sends DELETE snapshot with `resourceId: "{table}__{entity}"`
+- Example: Remove Payment entity from customer table
+- Result: `customer__Payment` marked as deleted, other entities remain active
+
+**Multiple entities:**
+- Each ChaimBinder creates its own CloudFormation custom resource
+- Removing multiple bindings triggers separate DELETE events
+- Each DELETE event uploads its own DELETE snapshot
+
+### Backward Compatibility
+
+- If `action` field is missing, defaults to `"UPSERT"` (backward compatible with v1.0 snapshots)
+- Existing snapshots without the action field continue to work as UPSERT operations
+
+---
+
 ## SaaS Ingestion Flow (Agent Contract)
 
 ### Goal
 On every CloudFormation Create/Update/Delete, notify Chaim SaaS:
-- **Create/Update**: Upload full snapshot via S3 presigned URL + commit pointer
-- **Delete**: Send minimal deactivation notification to mark the binding as inactive
+- **Create/Update**: Upload full snapshot (with `action: "UPSERT"`) via S3 presigned URL
+- **Delete**: Upload DELETE snapshot (with `action: "DELETE"` and `schema: null`) via S3 presigned URL
 
 ### Non-Goals
 
@@ -387,16 +554,20 @@ The chaim-cdk package does NOT:
 1. Lambda reads snapshot bytes from bundled `./snapshot.json`
 2. Generate `eventId` (UUID v4) at runtime
 3. Compute `contentHash` = SHA-256(snapshot bytes)
-4. POST /ingest/upload-url (auth required) → get presigned S3 URL
-5. PUT snapshot bytes to presigned URL
-6. POST /ingest/snapshot-ref with `action: 'UPSERT'`
+4. POST /ingest/presign (auth required) → get presigned S3 URL
+5. PUT snapshot bytes (with `action: "UPSERT"`) to presigned URL
+6. Ingest service processes snapshot and marks entity as active
 7. Respond to CloudFormation based on FailureMode
 
 **Delete:**
-1. Lambda reads minimal metadata from bundled `./snapshot.json`
-2. Generate `eventId` (UUID v4) for the delete event
-3. POST /ingest/snapshot-ref with `action: 'DELETE'`
-4. Respond to CloudFormation based on FailureMode
+1. Lambda reads snapshot from bundled `./snapshot.json`
+2. Build DELETE snapshot: `{ ...snapshot, action: "DELETE", schema: null, capturedAt: <new-timestamp> }`
+3. Generate `eventId` (UUID v4) at runtime
+4. Compute `contentHash` = SHA-256(DELETE snapshot bytes)
+5. POST /ingest/presign (auth required) → get presigned S3 URL
+6. PUT DELETE snapshot bytes to presigned URL
+7. Ingest service processes DELETE snapshot and marks entity as deleted
+8. Respond to CloudFormation based on FailureMode
 
 ### Invariants (must/never)
 - MUST NOT send large snapshots inline to CloudFormation or API Gateway.
@@ -445,7 +616,7 @@ The chaim-cdk package does NOT:
 | `src/binders/chaim-dynamodb-binder.ts` | DynamoDB-specific implementation |
 | `src/config/chaim-endpoints.ts` | Centralized API URLs and constants |
 | `src/types/ingest-contract.ts` | API request/response type definitions |
-| `src/types/snapshot-payload.ts` | LocalSnapshotPayload and legacy types |
+| `src/types/snapshot-payload.ts` | LocalSnapshotPayload (with action field), context, and response types |
 | `src/types/credentials.ts` | ChaimCredentials factory class |
 | `src/types/failure-mode.ts` | FailureMode enum definition |
 | `src/services/os-cache-paths.ts` | OS cache directory utilities |

@@ -1,42 +1,76 @@
 import { describe, it, expect } from 'vitest';
-import { validateCredentials, BaseBinderProps } from '../../src/types/base-binder-props';
+import { validateBinderProps, BaseBinderProps } from '../../src/types/base-binder-props';
 import { ChaimCredentials } from '../../src/types/credentials';
+import { TableBindingConfig } from '../../src/types/table-binding-config';
 
-describe('validateCredentials', () => {
-  const baseProps = {
-    schemaPath: './schemas/test.bprint',
-    appId: 'test-app',
-  };
+describe('validateBinderProps', () => {
+  describe('with valid config', () => {
+    it('should accept valid props', () => {
+      const config = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('key', 'secret')
+      );
 
-  describe('direct credentials', () => {
-    it('should accept valid direct credentials', () => {
       const props: BaseBinderProps = {
-        ...baseProps,
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        schemaPath: './schemas/test.bprint',
+        config,
       };
 
-      expect(() => validateCredentials(props)).not.toThrow();
+      expect(() => validateBinderProps(props)).not.toThrow();
+    });
+
+    it('should accept config with Secrets Manager credentials', () => {
+      const config = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromSecretsManager('chaim/credentials')
+      );
+
+      const props: BaseBinderProps = {
+        schemaPath: './schemas/test.bprint',
+        config,
+      };
+
+      expect(() => validateBinderProps(props)).not.toThrow();
     });
   });
 
-  describe('Secrets Manager', () => {
-    it('should accept valid Secrets Manager config', () => {
+  describe('missing schemaPath', () => {
+    it('should reject empty schemaPath', () => {
+      const config = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('key', 'secret')
+      );
+
       const props: BaseBinderProps = {
-        ...baseProps,
-        credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+        schemaPath: '',
+        config,
       };
 
-      expect(() => validateCredentials(props)).not.toThrow();
+      expect(() => validateBinderProps(props)).toThrow(/schemaPath.*cannot be empty/);
+    });
+
+    it('should reject whitespace-only schemaPath', () => {
+      const config = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('key', 'secret')
+      );
+
+      const props: BaseBinderProps = {
+        schemaPath: '   ',
+        config,
+      };
+
+      expect(() => validateBinderProps(props)).toThrow(/schemaPath.*cannot be empty/);
     });
   });
 
-  describe('no credentials', () => {
-    it('should reject no credentials at all', () => {
+  describe('missing config', () => {
+    it('should reject props without config', () => {
       const props = {
-        ...baseProps,
+        schemaPath: './schemas/test.bprint',
       } as BaseBinderProps;
 
-      expect(() => validateCredentials(props)).toThrow('Chaim SaaS credentials required');
+      expect(() => validateBinderProps(props)).toThrow(/config is required/);
     });
   });
 });

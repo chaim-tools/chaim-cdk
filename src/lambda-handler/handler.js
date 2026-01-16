@@ -2,20 +2,20 @@
  * Chaim Ingestion Lambda Handler
  * 
  * This is the CANONICAL Lambda handler for Chaim schema ingestion.
- * It implements the presigned upload flow:
+ * It implements the presigned upload flow with HMAC authentication:
  * 
- * Create/Update (UPSERT):
+ * Create/Update:
  *   1. Read snapshot.json from bundled asset
- *   2. Generate eventId (UUID v4) at runtime
+ *   2. Generate eventId (UUID v4) and nonce (UUID v4) at runtime
  *   3. Compute contentHash (SHA-256 of snapshot bytes)
- *   4. POST /ingest/upload-url → get presigned S3 URL
- *   5. PUT snapshot bytes to presigned URL
- *   6. POST /ingest/snapshot-ref with action: 'UPSERT'
+ *   4. POST /ingest/presign with HMAC signature → get presigned S3 URL
+ *   5. PUT snapshot bytes to presigned S3 URL
  * 
  * Delete:
- *   1. Read minimal metadata from snapshot.json
- *   2. Generate eventId (UUID v4)
- *   3. POST /ingest/snapshot-ref with action: 'DELETE'
+ *   1. Build DELETE snapshot (action: 'DELETE', schema: null)
+ *   2. POST /ingest/presign with HMAC signature → get presigned S3 URL
+ *   3. PUT DELETE snapshot bytes to presigned S3 URL
+ *   4. Return SUCCESS to CloudFormation
  * 
  * FailureMode:
  *   - STRICT: Return FAILED to CloudFormation on any error
@@ -52,36 +52,56 @@ exports.handler = async (event, context) => {
     const snapshotBytes = fs.readFileSync('./snapshot.json', 'utf-8');
     const snapshotPayload = JSON.parse(snapshotBytes);
     
-    // Compute contentHash (SHA-256 of snapshot bytes, excludes eventId)
+    // Compute contentHash (SHA-256 of snapshot bytes)
     contentHash = 'sha256:' + crypto.createHash('sha256').update(snapshotBytes).digest('hex');
     
-    // Get API credentials
-    const { apiKey, apiSecret } = await getCredentials();
-    
     if (requestType === 'Delete') {
-      // DELETE flow: notify Chaim that binding is deactivated
-      console.log('Processing Delete request - sending deactivation notification');
+      // DELETE flow: Send DELETE snapshot through presigned upload
+      console.log('Processing Delete request - ChaimBinder removed from stack');
+      console.log('Resource:', snapshotPayload.resourceId);
+      console.log('Entity:', snapshotPayload.identity?.entityName);
       
-      await postSnapshotRef({
+      // Build DELETE snapshot (set action to DELETE, schema to null)
+      const deleteSnapshot = {
+        ...snapshotPayload,
+        action: 'DELETE',
+        schema: null, // Schema not needed for deletion
+        capturedAt: new Date().toISOString(), // Update timestamp
+      };
+      
+      const deleteSnapshotBytes = JSON.stringify(deleteSnapshot, null, 2);
+      const deleteContentHash = 'sha256:' + crypto.createHash('sha256').update(deleteSnapshotBytes).digest('hex');
+      
+      console.log('Sending DELETE snapshot through presigned upload...');
+      
+      // Get API credentials
+      const { apiKey, apiSecret } = await getCredentials();
+      
+      // Step 1: Request presigned upload URL
+      console.log('Step 1: Requesting presigned upload URL for DELETE snapshot...');
+      const presignResponse = await postPresign({
         apiBaseUrl,
         apiKey,
         apiSecret,
-        payload: {
-          action: 'DELETE',
-          appId: snapshotPayload.appId,
-          eventId,
-          resourceId: snapshotPayload.resourceId,
-          stackName: snapshotPayload.stackName,
-          datastoreType: snapshotPayload.datastoreType,
-        },
+        appId: deleteSnapshot.appId,
+        eventId,
+        contentHash: deleteContentHash,
       });
       
-      console.log('Deactivation notification sent successfully');
+      const { uploadUrl } = presignResponse;
+      console.log('Received presigned URL (expires at:', presignResponse.expiresAt + ')');
       
-      return buildResponse(eventId, 'SUCCESS', 'DELETE', snapshotPayload.capturedAt);
+      // Step 2: Upload DELETE snapshot bytes to S3
+      console.log('Step 2: Uploading DELETE snapshot to S3...');
+      await uploadToS3(uploadUrl, deleteSnapshotBytes);
+      console.log('DELETE snapshot uploaded to S3 successfully');
+      console.log('S3 Key:', presignResponse.s3Key);
+      
+      console.log('Entity marked as deleted successfully');
+      return buildResponse(eventId, 'SUCCESS', 'DELETE', deleteSnapshot.capturedAt, deleteContentHash);
     }
     
-    // CREATE/UPDATE flow: presigned upload + commit
+    // CREATE/UPDATE flow: presigned upload
     console.log('Processing Create/Update request - executing ingestion workflow');
     console.log('EventId:', eventId);
     console.log('ContentHash:', contentHash);
@@ -93,46 +113,28 @@ exports.handler = async (event, context) => {
       );
     }
     
+    // Get API credentials
+    const { apiKey, apiSecret } = await getCredentials();
+    
     // Step 1: Request presigned upload URL
-    console.log('Step 1: Requesting presigned upload URL...');
-    const uploadUrlResponse = await postUploadUrl({
+    console.log('Step 1: Requesting presigned upload URL from /ingest/presign...');
+    const presignResponse = await postPresign({
       apiBaseUrl,
       apiKey,
       apiSecret,
-      payload: {
-        appId: snapshotPayload.appId,
-        eventId,
-        contentHash,
-      },
+      appId: snapshotPayload.appId,
+      eventId,
+      contentHash,
     });
     
-    const { uploadUrl } = uploadUrlResponse;
-    console.log('Received presigned URL');
+    const { uploadUrl } = presignResponse;
+    console.log('Received presigned URL (expires at:', presignResponse.expiresAt + ')');
     
     // Step 2: Upload snapshot bytes to S3
     console.log('Step 2: Uploading snapshot to S3...');
     await uploadToS3(uploadUrl, snapshotBytes);
-    console.log('Snapshot uploaded to S3');
-    
-    // Step 3: Commit snapshot reference
-    console.log('Step 3: Committing snapshot reference...');
-    await postSnapshotRef({
-      apiBaseUrl,
-      apiKey,
-      apiSecret,
-      payload: {
-        action: 'UPSERT',
-        appId: snapshotPayload.appId,
-        eventId,
-        contentHash,
-        datastoreType: snapshotPayload.datastoreType,
-        datastoreArn: snapshotPayload.dataStore.arn,
-        resourceId: snapshotPayload.resourceId,
-        stackName: snapshotPayload.stackName,
-      },
-    });
-    
-    console.log('Snapshot reference committed successfully');
+    console.log('Snapshot uploaded to S3 successfully');
+    console.log('S3 Key:', presignResponse.s3Key);
     
     return buildResponse(eventId, 'SUCCESS', 'UPSERT', snapshotPayload.capturedAt, contentHash);
     
@@ -218,11 +220,39 @@ async function getCredentials() {
 }
 
 /**
- * POST to /ingest/upload-url endpoint.
+ * POST to /ingest/presign endpoint.
+ * 
+ * Request body includes:
+ * - appId: Application identifier
+ * - eventId: UUID v4 for this upload
+ * - contentHash: SHA-256 hash with 'sha256:' prefix
+ * - timestamp: ISO 8601 timestamp (must be within 5 minutes of server time)
+ * - nonce: UUID v4 for replay protection
+ * 
+ * HMAC signature computed over the entire request body.
+ * 
+ * @returns {Object} { uploadUrl, s3Key, expiresAt }
  */
-async function postUploadUrl({ apiBaseUrl, apiKey, apiSecret, payload }) {
-  const url = `${apiBaseUrl}/ingest/upload-url`;
+async function postPresign({ apiBaseUrl, apiKey, apiSecret, appId, eventId, contentHash }) {
+  const url = `${apiBaseUrl}/ingest/presign`;
+  
+  // Generate nonce (UUID v4) for replay protection
+  const nonce = crypto.randomUUID();
+  
+  // Generate timestamp (ISO 8601) - must be within 5 minutes of server time
+  const timestamp = new Date().toISOString();
+  
+  const payload = {
+    appId,
+    eventId,
+    contentHash,
+    timestamp,
+    nonce,
+  };
+  
   const body = JSON.stringify(payload);
+  
+  console.log('Presign request:', { appId, eventId, contentHash, timestamp, nonce });
   
   const responseText = await httpRequest({
     method: 'POST',
@@ -235,11 +265,24 @@ async function postUploadUrl({ apiBaseUrl, apiKey, apiSecret, payload }) {
     apiSecret,
   });
   
-  return JSON.parse(responseText);
+  const response = JSON.parse(responseText);
+  
+  // Validate response structure
+  if (!response.uploadUrl) {
+    throw new Error('Invalid presign response: missing uploadUrl');
+  }
+  
+  return response;
 }
 
 /**
  * PUT snapshot bytes to S3 presigned URL.
+ * 
+ * Important:
+ * - Use HTTP PUT method
+ * - Set Content-Type: application/json
+ * - Do NOT add AWS signature headers (presigned URL handles auth)
+ * - Upload must complete within 5 minutes (URL expiry)
  */
 async function uploadToS3(presignedUrl, snapshotBytes) {
   await httpRequest({
@@ -249,29 +292,8 @@ async function uploadToS3(presignedUrl, snapshotBytes) {
       'Content-Type': 'application/json',
     },
     body: snapshotBytes,
-    // No HMAC signature for S3 presigned URL
+    // No HMAC signature for S3 presigned URL - authentication is in the URL
   });
-}
-
-/**
- * POST to /ingest/snapshot-ref endpoint.
- */
-async function postSnapshotRef({ apiBaseUrl, apiKey, apiSecret, payload }) {
-  const url = `${apiBaseUrl}/ingest/snapshot-ref`;
-  const body = JSON.stringify(payload);
-  
-  const responseText = await httpRequest({
-    method: 'POST',
-    url,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-chaim-key': apiKey,
-    },
-    body,
-    apiSecret,
-  });
-  
-  return JSON.parse(responseText);
 }
 
 /**
@@ -317,7 +339,17 @@ async function httpRequest({ method, url, headers, body, apiSecret }) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(data);
         } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          // Try to parse error response
+          let errorMessage = `HTTP ${res.statusCode}: ${data}`;
+          try {
+            const errorBody = JSON.parse(data);
+            if (errorBody.errorMessage) {
+              errorMessage = `HTTP ${res.statusCode}: ${errorBody.errorMessage}`;
+            }
+          } catch (e) {
+            // Use default error message if JSON parsing fails
+          }
+          reject(new Error(errorMessage));
         }
       });
     });
@@ -335,4 +367,3 @@ async function httpRequest({ method, url, headers, body, apiSecret }) {
     req.end();
   });
 }
-

@@ -22,12 +22,8 @@ describe('chaim-endpoints config', () => {
   });
 
   describe('CHAIM_ENDPOINTS', () => {
-    it('should define UPLOAD_URL endpoint', () => {
-      expect(CHAIM_ENDPOINTS.UPLOAD_URL).toBe('/ingest/upload-url');
-    });
-
-    it('should define SNAPSHOT_REF endpoint', () => {
-      expect(CHAIM_ENDPOINTS.SNAPSHOT_REF).toBe('/ingest/snapshot-ref');
+    it('should define PRESIGN endpoint', () => {
+      expect(CHAIM_ENDPOINTS.PRESIGN).toBe('/ingest/presign');
     });
 
     it('should have endpoints starting with /', () => {
@@ -59,11 +55,9 @@ describe('chaim-endpoints config', () => {
 
   describe('URL construction', () => {
     it('should construct valid full URLs', () => {
-      const uploadUrl = DEFAULT_CHAIM_API_BASE_URL + CHAIM_ENDPOINTS.UPLOAD_URL;
-      const snapshotRefUrl = DEFAULT_CHAIM_API_BASE_URL + CHAIM_ENDPOINTS.SNAPSHOT_REF;
+      const presignUrl = DEFAULT_CHAIM_API_BASE_URL + CHAIM_ENDPOINTS.PRESIGN;
 
-      expect(uploadUrl).toBe('https://api.chaim.co/ingest/upload-url');
-      expect(snapshotRefUrl).toBe('https://api.chaim.co/ingest/snapshot-ref');
+      expect(presignUrl).toBe('https://api.chaim.co/ingest/presign');
     });
   });
 });

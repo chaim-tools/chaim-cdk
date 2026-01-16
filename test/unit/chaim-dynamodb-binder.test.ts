@@ -5,20 +5,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
+import { TableBindingConfig } from '../../src/types/table-binding-config';
+import { FailureMode } from '../../src/types/failure-mode';
 
 // Mock schema data
 const mockSchemaData = {
   schemaVersion: 'v1',
-  namespace: 'test.users',
+  entityName: 'User',
   description: 'Test user schema',
-  entity: {
-    name: 'User',
-    primaryKey: { partitionKey: 'userId' },
-    fields: [
-      { name: 'userId', type: 'string', required: true },
-      { name: 'email', type: 'string', required: true },
-    ],
-  },
+  primaryKey: { partitionKey: 'userId' },
+  fields: [
+    { name: 'userId', type: 'string', required: true },
+    { name: 'email', type: 'string', required: true },
+  ],
 };
 
 // Mock schema service
@@ -32,6 +31,7 @@ describe('ChaimDynamoDBBinder', () => {
   let app: cdk.App;
   let stack: cdk.Stack;
   let table: dynamodb.Table;
+  let testConfig: TableBindingConfig;
   const testAssetDirs: string[] = [];
 
   // Clean up test asset directories after all tests
@@ -55,6 +55,10 @@ describe('ChaimDynamoDBBinder', () => {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
+    testConfig = new TableBindingConfig(
+      'test-app',
+      ChaimCredentials.fromApiKeys('test-key', 'test-secret')
+    );
   });
 
   afterEach(() => {
@@ -89,8 +93,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder).toBeDefined();
@@ -101,25 +104,28 @@ describe('ChaimDynamoDBBinder', () => {
     });
 
     it('should create binder with Secrets Manager', () => {
+      const smConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromSecretsManager('chaim/credentials')
+      );
+      
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+        config: smConfig,
       });
 
       expect(binder).toBeDefined();
       expect(binder.resourceId).toBeDefined();
     });
 
-    it('should throw error when no credentials provided', () => {
+    it('should throw error when no config provided', () => {
       expect(() => {
         new ChaimDynamoDBBinder(stack, 'TestBinder', {
           schemaPath: './schemas/test.bprint',
           table,
-          appId: 'test-app',
         } as any);
-      }).toThrow();
+      }).toThrow(/config is required/);
     });
   });
 
@@ -134,8 +140,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const metadata = binder.dynamoDBMetadata;
@@ -156,8 +161,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'CompositeBinder', {
         schemaPath: './schemas/test.bprint',
         table: compositeTable,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.dynamoDBMetadata.sortKey).toBe('sk');
@@ -177,8 +181,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'GSIBinder', {
         schemaPath: './schemas/test.bprint',
         table: tableWithGSI,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       if (binder.dynamoDBMetadata.globalSecondaryIndexes) {
@@ -196,23 +199,27 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder).toBeDefined();
     });
 
     it('should accept STRICT failure mode', () => {
+      const strictConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        FailureMode.STRICT
+      );
+      
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
-        failureMode: 'STRICT',
+        config: strictConfig,
       });
 
       expect(binder).toBeDefined();
+      expect(binder.config.failureMode).toBe(FailureMode.STRICT);
     });
   });
 
@@ -225,8 +232,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.localSnapshotPath).toBeDefined();
@@ -237,8 +243,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       expect(binder.localSnapshotPath).toBeDefined();
@@ -250,8 +255,7 @@ describe('ChaimDynamoDBBinder', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       // resourceId should contain entity name from schema

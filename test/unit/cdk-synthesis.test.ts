@@ -13,20 +13,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
+import { TableBindingConfig } from '../../src/types/table-binding-config';
+import { FailureMode } from '../../src/types/failure-mode';
 
 // Mock schema data for testing
 const mockSchemaData = {
   schemaVersion: '1.0.0',
-  namespace: 'test.users',
+  entityName: 'User',
   description: 'Test user schema',
-  entity: {
-    name: 'User',
-    primaryKey: { partitionKey: 'userId' },
-    fields: [
-      { name: 'userId', type: 'string', required: true },
-      { name: 'email', type: 'string', required: true },
-    ],
-  },
+  primaryKey: { partitionKey: 'userId' },
+  fields: [
+    { name: 'userId', type: 'string', required: true },
+    { name: 'email', type: 'string', required: true },
+  ],
 };
 
 // Mock the SchemaService
@@ -40,6 +39,7 @@ describe('CDK Synthesis Tests', () => {
   let app: cdk.App;
   let stack: cdk.Stack;
   let table: dynamodb.Table;
+  let testConfig: TableBindingConfig;
   const testAssetDirs: string[] = [];
 
   // Helper to ensure asset directory exists
@@ -66,6 +66,10 @@ describe('CDK Synthesis Tests', () => {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
+    testConfig = new TableBindingConfig(
+      'test-app',
+      ChaimCredentials.fromApiKeys('test-key', 'test-secret')
+    );
   });
 
   afterEach(() => {
@@ -92,8 +96,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -108,8 +111,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -120,11 +122,15 @@ describe('CDK Synthesis Tests', () => {
     });
 
     it('should set APP_ID environment variable', () => {
+      const customAppConfig = new TableBindingConfig(
+        'my-test-app',
+        ChaimCredentials.fromApiKeys('test-key', 'test-secret')
+      );
+      
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'my-test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: customAppConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -139,12 +145,16 @@ describe('CDK Synthesis Tests', () => {
     });
 
     it('should set FAILURE_MODE environment variable', () => {
+      const strictConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        FailureMode.STRICT
+      );
+      
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
-        failureMode: 'STRICT',
+        config: strictConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -162,8 +172,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -187,8 +196,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -211,11 +219,15 @@ describe('CDK Synthesis Tests', () => {
     });
 
     it('should grant Secrets Manager permissions when using SM credentials', () => {
+      const smConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromSecretsManager('chaim/credentials')
+      );
+      
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+        config: smConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -243,8 +255,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -257,8 +268,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -275,11 +285,15 @@ describe('CDK Synthesis Tests', () => {
     });
 
     it('should set API_KEY and API_SECRET when using direct credentials', () => {
+      const customKeyConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('my-key', 'my-secret')
+      );
+      
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('my-key', 'my-secret'),
+        config: customKeyConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -301,11 +315,15 @@ describe('CDK Synthesis Tests', () => {
     });
 
     it('should set SECRET_NAME when using Secrets Manager credentials', () => {
+      const smConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromSecretsManager('chaim/my-secret')
+      );
+      
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromSecretsManager('chaim/my-secret'),
+        config: smConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -329,8 +347,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -348,8 +365,7 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);
@@ -378,15 +394,13 @@ describe('CDK Synthesis Tests', () => {
       new ChaimDynamoDBBinder(stack, 'UserBinder', {
         schemaPath: './schemas/user.bprint',
         table,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       new ChaimDynamoDBBinder(stack, 'OrderBinder', {
         schemaPath: './schemas/order.bprint',
         table: table2,
-        appId: 'test-app',
-        credentials: ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        config: testConfig,
       });
 
       const template = cdk.assertions.Template.fromStack(stack);

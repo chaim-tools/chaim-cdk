@@ -31,19 +31,24 @@ npm install @chaim-tools/cdk-lib
 Already have a DynamoDB table? Add Chaim in seconds:
 
 ```typescript
-import { ChaimDynamoDBBinder, ChaimCredentials } from '@chaim-tools/cdk-lib';
+import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig } from '@chaim-tools/cdk-lib';
 
 // Your existing CDK stack
 const usersTable = new dynamodb.Table(this, 'UsersTable', {
   partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
 });
 
+// Create binding configuration
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/credentials')
+);
+
 // Add Chaim - that's it
 new ChaimDynamoDBBinder(this, 'UsersSchema', {
   schemaPath: './schemas/users.bprint',
   table: usersTable,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
+  config,
 });
 ```
 
@@ -112,10 +117,13 @@ credentials: ChaimCredentials.fromSecretsManager('chaim/credentials')
 For local development, you can use direct credentials:
 
 ```typescript
-credentials: ChaimCredentials.fromApiKeys(
-  process.env.CHAIM_API_KEY!,
-  process.env.CHAIM_API_SECRET!
-)
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromApiKeys(
+    process.env.CHAIM_API_KEY!,
+    process.env.CHAIM_API_SECRET!
+  )
+);
 ```
 
 ### Credential Security Model
@@ -129,14 +137,19 @@ By default, Chaim uses `BEST_EFFORT` mode - your deployment succeeds even if ing
 For critical environments, use `STRICT` mode to roll back on failure:
 
 ```typescript
-import { FailureMode } from '@chaim-tools/cdk-lib';
+import { FailureMode, TableBindingConfig } from '@chaim-tools/cdk-lib';
+
+// Create config with STRICT mode
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/credentials'),
+  FailureMode.STRICT  // Optional third parameter
+);
 
 new ChaimDynamoDBBinder(this, 'UsersSchema', {
   schemaPath: './schemas/users.bprint',
   table: usersTable,
-  appId: 'my-app',
-  credentials: ChaimCredentials.fromSecretsManager('chaim/credentials'),
-  failureMode: FailureMode.STRICT,
+  config,
 });
 ```
 
@@ -145,14 +158,58 @@ new ChaimDynamoDBBinder(this, 'UsersSchema', {
 | `BEST_EFFORT` (default) | Deployment continues if ingestion fails |
 | `STRICT` | Deployment rolls back if ingestion fails |
 
+## Single-Table Design
+
+For single-table design with multiple entities, create **one** `TableBindingConfig` and share it across all bindings:
+
+```typescript
+import { TableBindingConfig } from '@chaim-tools/cdk-lib';
+
+const singleTable = new dynamodb.Table(this, 'SingleTable', {
+  partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+  sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+});
+
+// Create config ONCE
+const tableConfig = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/credentials')
+);
+
+// Share across all entities
+new ChaimDynamoDBBinder(this, 'UserBinding', {
+  schemaPath: './schemas/user.bprint',
+  table: singleTable,
+  config: tableConfig,  // Same config
+});
+
+new ChaimDynamoDBBinder(this, 'OrderBinding', {
+  schemaPath: './schemas/order.bprint',
+  table: singleTable,
+  config: tableConfig,  // Same config
+});
+```
+
+**Why?** All entities in the same table must share the same `appId` and `credentials`. `TableBindingConfig` enforces this by design.
+
 ## Props Reference
+
+### ChaimDynamoDBBinder
 
 | Property | Required | Description |
 |----------|----------|-------------|
 | `schemaPath` | Yes | Path to your `.bprint` schema file |
 | `table` | Yes | Your DynamoDB table |
+| `config` | Yes | `TableBindingConfig` with appId, credentials, and failureMode |
+
+### TableBindingConfig
+
+Constructor: `new TableBindingConfig(appId, credentials, failureMode?)`
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
 | `appId` | Yes | Your Chaim application ID |
-| `credentials` | Yes | API credentials |
+| `credentials` | Yes | API credentials (from `ChaimCredentials`) |
 | `failureMode` | No | `BEST_EFFORT` (default) or `STRICT` |
 
 ## Data Sent to Chaim

@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import { ChaimDynamoDBBinder, ChaimCredentials, FailureMode } from '@chaim-tools/cdk-lib';
+import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig, FailureMode } from '@chaim-tools/cdk-lib';
 import * as path from 'path';
 
 /**
@@ -26,15 +26,18 @@ export class ConsumerStack extends cdk.Stack {
 
     // Example 1: Using direct API credentials (for development/testing)
     // failureMode defaults to BEST_EFFORT - deployment continues even if ingestion fails
+    const usersConfig = new TableBindingConfig(
+      'my-app',
+      ChaimCredentials.fromApiKeys(
+        process.env.CHAIM_API_KEY || 'demo-api-key',
+        process.env.CHAIM_API_SECRET || 'demo-api-secret'
+      )
+    );
+    
     new ChaimDynamoDBBinder(this, 'UsersBinding', {
       schemaPath: path.join(__dirname, '..', 'schemas', 'users.bprint'),
       table: usersTable,
-      appId: 'my-app',
-      credentials: ChaimCredentials.fromApiKeys(
-        process.env.CHAIM_API_KEY || 'demo-api-key',
-        process.env.CHAIM_API_SECRET || 'demo-api-secret'
-      ),
-      // failureMode: FailureMode.BEST_EFFORT (default)
+      config: usersConfig,
     });
 
     // ===========================================
@@ -48,12 +51,16 @@ export class ConsumerStack extends cdk.Stack {
 
     // Example 2: Using Secrets Manager with STRICT failure mode (for production)
     // STRICT mode rolls back the deployment if ingestion fails
+    const ordersConfig = new TableBindingConfig(
+      'my-app',
+      ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
+      FailureMode.STRICT
+    );
+    
     new ChaimDynamoDBBinder(this, 'OrdersBinding', {
       schemaPath: path.join(__dirname, '..', 'schemas', 'orders.bprint'),
       table: ordersTable,
-      appId: 'my-app',
-      credentials: ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
-      failureMode: FailureMode.STRICT,
+      config: ordersConfig,
     });
 
     // ===========================================

@@ -42,25 +42,23 @@ describe('SchemaService', () => {
   describe('readSchema', () => {
     const validSchema: SchemaData = {
       schemaVersion: '1.0.0',
-      namespace: 'user',
+      entityName: 'User',
       description: 'User entity schema',
-      entity: {
-        primaryKey: {
-          partitionKey: 'userId'
+      primaryKey: {
+        partitionKey: 'userId'
+      },
+      fields: [
+        {
+          name: 'userId',
+          type: 'string',
+          required: true
         },
-        fields: [
-          {
-            name: 'userId',
-            type: 'string',
-            required: true
-          },
-          {
-            name: 'email',
-            type: 'string',
-            required: true
-          }
-        ]
-      }
+        {
+          name: 'email',
+          type: 'string',
+          required: true
+        }
+      ]
     };
 
     it('should read and parse valid schema file', () => {
@@ -82,18 +80,18 @@ describe('SchemaService', () => {
 
     it('should validate schema structure after parsing', () => {
       mockFs.existsSync.mockReturnValue(true);
-      const invalidSchema = { ...validSchema, entity: undefined };
+      const invalidSchema = { ...validSchema, primaryKey: undefined };
       mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
       
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include entity field');
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include primaryKey field');
     });
 
     it('should re-throw validation errors with context', () => {
       mockFs.existsSync.mockReturnValue(true);
-      const invalidSchema = { ...validSchema, entity: undefined };
+      const invalidSchema = { ...validSchema, primaryKey: undefined };
       mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
       
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema validation failed for ./schemas/user.bprint: Schema must include entity field');
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema validation failed for ./schemas/user.bprint: Schema must include primaryKey field');
     });
 
     it('should re-throw non-Error exceptions as-is', () => {
@@ -109,12 +107,10 @@ describe('SchemaService', () => {
   describe('schema structure validation', () => {
     const baseValidSchema = {
       schemaVersion: '1.0.0',
-      namespace: 'user',
+      entityName: 'User',
       description: 'User entity schema',
-      entity: {
-        primaryKey: { partitionKey: 'userId' },
-        fields: [{ name: 'userId', type: 'string' }]
-      }
+      primaryKey: { partitionKey: 'userId' },
+      fields: [{ name: 'userId', type: 'string' }]
     };
 
     it('should accept valid schema structure', () => {
@@ -134,14 +130,14 @@ describe('SchemaService', () => {
       expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include schemaVersion field');
     });
 
-    it('should reject schema without namespace', () => {
+    it('should reject schema without entityName', () => {
       const invalidSchema = { ...baseValidSchema } as any;
-      delete invalidSchema.namespace;
+      delete invalidSchema.entityName;
       
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
       
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include namespace field');
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include entityName field');
     });
 
     it('should reject schema without description', () => {
@@ -154,48 +150,24 @@ describe('SchemaService', () => {
       expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include description field');
     });
 
-    it('should reject schema without entity', () => {
+    it('should reject schema without primaryKey', () => {
       const invalidSchema = { ...baseValidSchema } as any;
-      delete invalidSchema.entity;
+      delete invalidSchema.primaryKey;
       
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
       
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include entity field');
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include primaryKey field');
     });
 
-    it('should reject entity without primaryKey', () => {
+    it('should reject schema without fields', () => {
       const invalidSchema = { ...baseValidSchema } as any;
-      delete invalidSchema.entity.primaryKey;
+      delete invalidSchema.fields;
       
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
       
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Entity must include primaryKey field');
-    });
-
-    it('should reject entity without fields', () => {
-      const invalidSchema = { ...baseValidSchema } as any;
-      // Create a schema with primaryKey but no fields
-      invalidSchema.entity = {
-        primaryKey: { partitionKey: 'userId' }
-        // fields is intentionally missing
-      };
-      
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
-      
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Entity must include fields array with at least one field');
-    });
-
-    it('should reject entity without primaryKey', () => {
-      const invalidSchema = { ...baseValidSchema } as any;
-      delete invalidSchema.entity.primaryKey;
-      
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(invalidSchema));
-      
-      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Entity must include primaryKey field');
+      expect(() => SchemaService.readSchema('./schemas/user.bprint')).toThrow('Schema must include fields array with at least one field');
     });
   });
 });
