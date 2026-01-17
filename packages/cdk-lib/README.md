@@ -10,6 +10,29 @@ npm install @chaim-tools/cdk-lib
 pnpm add @chaim-tools/cdk-lib
 ```
 
+## Development
+
+### Build
+
+```bash
+pnpm install
+pnpm build
+```
+
+### Test
+
+```bash
+pnpm test              # Run tests
+pnpm test:watch        # Watch mode
+pnpm test:coverage     # With coverage
+```
+
+### Clean
+
+```bash
+pnpm clean
+```
+
 ## Quick Start
 
 ```typescript

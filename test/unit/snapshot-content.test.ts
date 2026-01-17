@@ -272,10 +272,10 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.region).toBe('us-east-1');
+      expect(snapshot.providerIdentity.region).toBe('us-east-1');
     });
 
-    it('should write snapshot with stackName in identity', () => {
+    it('should write snapshot with stackName extractable from stableResourceKey', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
@@ -286,7 +286,9 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.identity.stackName).toBe('TestStack');
+      // v3.0: stackName is extractable from stableResourceKey (format: dynamodb:path:StackName/ResourceName)
+      expect(snapshot.identity.stableResourceKey).toContain('TestStack');
+      expect(snapshot.identity.stableResourceKey).toMatch(/path:TestStack\//);
     });
 
     it('should write snapshot with appId', () => {
@@ -305,10 +307,10 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.appId).toBe('my-custom-app');
+      expect(snapshot.identity.appId).toBe('my-custom-app');
     });
 
-    it('should write snapshot with datastoreType in identity', () => {
+    it('should write snapshot with resource type', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
@@ -319,7 +321,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.identity.datastoreType).toBe('dynamodb');
+      expect(snapshot.resource.type).toBe('dynamodb');
     });
 
     it('should write snapshot with embedded schema', () => {
@@ -356,7 +358,7 @@ describe('Snapshot Content Tests', () => {
       expect(snapshot.resource.partitionKey).toBe('pk');
     });
 
-    it('should write snapshot with context', () => {
+    it('should write snapshot with providerIdentity containing deploymentId', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
@@ -367,7 +369,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.context).toBeDefined();
+      // v3.0: removed context object, deploymentId is in providerIdentity
       expect(snapshot.providerIdentity.deploymentId).toBeDefined();
       // v3.0: accountId and region in providerIdentity
       expect(snapshot.providerIdentity.accountId).toBe('123456789012');
@@ -432,10 +434,10 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.bindingId).toBeDefined();
-      expect(snapshot.bindingId).toContain('test-app');
-      expect(snapshot.bindingId).toContain('dynamodb');
-      expect(snapshot.bindingId).toContain('User');
+      expect(snapshot.identity.bindingId).toBeDefined();
+      expect(snapshot.identity.bindingId).toContain('test-app');
+      expect(snapshot.identity.bindingId).toContain('dynamodb');
+      expect(snapshot.identity.bindingId).toContain('User');
     });
 
     it('should NOT include tableId in v2.0 (removed - was token in LOCAL snapshots)', () => {
@@ -479,8 +481,8 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot._schemaHash).toBeDefined();
-      expect(snapshot._schemaHash).toMatch(/^sha256:/);
+      expect(snapshot.hashes.schemaHash).toBeDefined();
+      expect(snapshot.hashes.schemaHash).toMatch(/^sha256:/);
     });
 
     it('should write snapshot with _packageVersion for Lambda', () => {
@@ -494,8 +496,8 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot._packageVersion).toBeDefined();
-      expect(typeof snapshot._packageVersion).toBe('string');
+      expect(snapshot.producer.version).toBeDefined();
+      expect(typeof snapshot.producer.version).toBe('string');
     });
   });
 
@@ -511,9 +513,10 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      // v3.0: resource.id contains the ARN
+      // v3.0: resource.id contains the ARN (may be token in LOCAL mode)
       expect(snapshot.resource.id).toBeDefined();
-      expect(snapshot.resource.id).toContain('arn:aws:dynamodb');
+      // ARN can be a token at synth time
+      expect(snapshot.resource.id).toMatch(/arn:aws:dynamodb|\$\{Token\[/);
     });
 
     it('should NOT have duplicate name field (use tableName)', () => {

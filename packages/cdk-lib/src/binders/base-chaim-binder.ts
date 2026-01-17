@@ -326,7 +326,6 @@ export abstract class BaseChaimBinder extends Construct {
       component: 'chaim-cdk' as const,
       version: this.getPackageVersion(),
       runtime: process.version,
-      mode: 'LOCAL' as const,
     };
 
     return {

@@ -2,6 +2,29 @@
 
 CDK stack to activate the `Chaim::DynamoDB::Binding` CloudFormation Registry type.
 
+## Development
+
+### Build
+
+```bash
+pnpm install
+pnpm build
+```
+
+### Deploy
+
+```bash
+pnpm cdk synth         # Synthesize stack
+pnpm cdk deploy        # Deploy to AWS
+pnpm cdk diff          # Show changes
+```
+
+### Clean
+
+```bash
+pnpm clean
+```
+
 ## Usage
 
 ### Option 1: Using CDK Context Parameters (Recommended)

@@ -179,8 +179,6 @@ export interface ProducerMetadata {
   /** Lambda runtime (e.g., 'nodejs20.x') */
   readonly runtime: string;
 
-  /** Mode: LOCAL (synth-time) or PUBLISHED (deploy-time) */
-  readonly mode: 'LOCAL' | 'PUBLISHED';
 }
 
 /**

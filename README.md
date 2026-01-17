@@ -10,6 +10,46 @@ Chaim captures your schema intent at synth or deploy time and publishes it to th
 npm install @chaim-tools/cdk-lib
 ```
 
+## Development
+
+### Build
+
+```bash
+pnpm install
+pnpm build             # Build all packages
+cd packages/cdk-lib
+pnpm build             # Build single package
+```
+
+### Test
+
+```bash
+pnpm test              # All tests
+pnpm test:packages     # Unit tests only
+pnpm test:integration  # Integration tests only
+pnpm test:coverage     # With coverage
+```
+
+### Clean
+
+Removes build artifacts:
+
+```bash
+pnpm clean
+```
+
+### Integration Tests
+
+Integration tests deploy real AWS resources and are **skipped by default**. To run:
+
+```bash
+export CHAIM_API_KEY=your-key
+export CHAIM_API_SECRET=your-secret
+pnpm test:integration
+```
+
+⚠️ **Warning**: Deploys actual AWS resources and incurs costs.
+
 ## Prerequisites
 
 | Requirement | Version | Notes |

@@ -11,9 +11,8 @@ import * as crypto from 'crypto';
 import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { BaseBinderProps, validateBinderProps } from '../types/base-binder-props';
 import { DataStoreMetadata } from '../types/data-store-metadata';
-import { LocalSnapshotPayload, StackContext } from '../types/snapshot-payload';
+import { LocalSnapshotPayload } from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
-import { FailureMode } from '../types/failure-mode';
 import { TableBindingConfig } from '../types/table-binding-config';
 import { ensureDirExists } from '../services/os-cache-paths';
 import { getChaimAssetDir } from '../services/cdk-project-root';
@@ -408,8 +407,7 @@ export abstract class BaseChaimBinder extends Construct {
     const producer = {
       component: 'chaim-cdk' as const,
       version: this.getPackageVersion(),
-      runtime: process.version,
-      mode: 'LOCAL' as const,
+      runtime: process.version
     };
 
     return {
