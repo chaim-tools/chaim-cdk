@@ -6,14 +6,20 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { BaseBinderProps, validateBinderProps } from '../types/base-binder-props';
 import { DataStoreMetadata } from '../types/data-store-metadata';
-import { LocalSnapshotPayload, StackContext } from '../types/snapshot-payload';
+import { LocalSnapshotPayload } from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
 import { FailureMode } from '../types/failure-mode';
 import { TableBindingConfig } from '../types/table-binding-config';
+import {
+  SnapshotCachePolicy,
+  DEFAULT_SNAPSHOT_CACHE_POLICY,
+  SNAPSHOT_CACHE_POLICY_CONTEXT_KEY,
+} from '../types/snapshot-cache-policy';
 import {
   DEFAULT_CHAIM_API_BASE_URL,
   DEFAULT_MAX_SNAPSHOT_BYTES,
@@ -27,6 +33,7 @@ import {
   getLocalSnapshotPath,
   ensureDirExists,
 } from '../services/os-cache-paths';
+import { pruneStackSnapshots } from '../services/snapshot-cleanup';
 
 /**
  * Path to the canonical Lambda handler file.
@@ -108,6 +115,13 @@ export abstract class BaseChaimBinder extends Construct {
       datastoreType,
       resourceName: normalizedResourceName,
       resourceId: normalizedResourceId,
+    });
+
+    // Apply snapshot cache policy (cleanup if requested)
+    this.applySnapshotCachePolicy({
+      accountId: normalizedAccountId,
+      region: normalizedRegion,
+      stackName,
     });
 
     // Write LOCAL snapshot to OS cache for chaim-cli consumption
@@ -210,8 +224,11 @@ export abstract class BaseChaimBinder extends Construct {
   /**
    * Get the resource name for display and filenames.
    * For DynamoDB, this is the user label (not necessarily the physical table name).
+   * 
+   * Subclasses can override this to provide a more meaningful name
+   * (e.g., construct node ID instead of physical resource name which may contain tokens).
    */
-  private getResourceName(): string {
+  protected getResourceName(): string {
     const metadata = this.dataStoreMetadata as any;
     return metadata.tableName || metadata.name || 'resource';
   }
@@ -224,17 +241,21 @@ export abstract class BaseChaimBinder extends Construct {
   }
 
   /**
-   * Build the base snapshot context (shared across snapshots).
+   * Read package version from package.json.
+   * Used to populate producer metadata in snapshots.
    */
-  private buildStackContext(): StackContext {
-    const stack = cdk.Stack.of(this);
-    return {
-      account: stack.account,
-      region: stack.region,
-      stackId: stack.stackId,
-      stackName: stack.stackName,
-    };
+  private getPackageVersion(): string {
+    try {
+      const packagePath = path.join(__dirname, '..', '..', 'package.json');
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+      return packageJson.version || '0.0.0';
+    } catch (error) {
+      console.warn('Failed to read package version:', error);
+      return '0.0.0';
+    }
   }
+
+
 
   /**
    * Build a LOCAL snapshot payload for CLI consumption.
@@ -249,23 +270,205 @@ export abstract class BaseChaimBinder extends Construct {
     resourceId: string;
   }): LocalSnapshotPayload {
     const capturedAt = new Date().toISOString();
+    const stack = cdk.Stack.of(this);
 
-    return {
-      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-      action: 'UPSERT', // Normal operation - create or update entity
-      provider: 'aws',
+    // Build provider identity
+    const providerIdentity = {
+      cloud: 'aws' as const,
       accountId: params.accountId,
       region: params.region,
-      stackName: params.stackName,
-      datastoreType: params.datastoreType,
-      resourceName: params.resourceName,
-      resourceId: params.resourceId,
-      appId: this.config.appId,
-      schema: this.schemaData,
-      dataStore: this.dataStoreMetadata,
-      context: this.buildStackContext(),
-      capturedAt,
+      deploymentSystem: 'cloudformation' as const,
+      deploymentId: stack.stackId,
     };
+
+    // Build binding identity
+    const stableResourceKey = `${params.datastoreType}:path:${params.stackName}/${params.resourceName}`;
+    const entityId = `${this.config.appId}:${this.schemaData.entityName}`;
+    const bindingId = `${this.config.appId}:${stableResourceKey}:${this.schemaData.entityName}`;
+
+    const identity = {
+      appId: this.config.appId,
+      entityName: this.schemaData.entityName,
+      stableResourceKeyStrategy: 'cdk-construct-path' as const,
+      stableResourceKey,
+      resourceId: params.resourceId,
+      entityId,
+      bindingId,
+    };
+
+    // Build operation metadata
+    const operation = {
+      eventId: this.generateUuid(),
+      requestType: 'Create' as const,
+      failureMode: this.config.failureMode,
+    };
+
+    // Build resolution metadata
+    const hasTokens = this.detectUnresolvedTokens(this.dataStoreMetadata);
+    const resolution = {
+      mode: 'LOCAL' as const,
+      hasTokens,
+    };
+
+    // Build hashes
+    const schemaBytes = JSON.stringify(this.schemaData);
+    const schemaHash = 'sha256:' + crypto.createHash('sha256').update(schemaBytes).digest('hex');
+    const hashes = {
+      schemaHash,
+      contentHash: '',
+    };
+
+    // Build resource metadata
+    const resource = this.buildResourceMetadata(params);
+
+    // Build producer metadata
+    const producer = {
+      component: 'chaim-cdk' as const,
+      version: this.getPackageVersion(),
+      runtime: process.version,
+      mode: 'LOCAL' as const,
+    };
+
+    return {
+      snapshotVersion: SNAPSHOT_SCHEMA_VERSION,
+      action: 'UPSERT',
+      capturedAt,
+      providerIdentity,
+      identity,
+      operation,
+      resolution,
+      hashes,
+      schema: this.schemaData,
+      resource,
+      producer,
+    };
+  }
+
+  /**
+   * Build resource metadata from dataStore metadata.
+   */
+  private buildResourceMetadata(params: any): any {
+    const dynamoMetadata = this.dataStoreMetadata as any;
+    
+    return {
+      type: 'dynamodb',
+      kind: 'table',
+      id: dynamoMetadata.tableArn,
+      name: dynamoMetadata.tableName,
+      region: params.region,
+      partitionKey: dynamoMetadata.partitionKey,
+      sortKey: dynamoMetadata.sortKey,
+      globalSecondaryIndexes: dynamoMetadata.globalSecondaryIndexes,
+      localSecondaryIndexes: dynamoMetadata.localSecondaryIndexes,
+      ttlAttribute: dynamoMetadata.ttlAttribute,
+      streamEnabled: dynamoMetadata.streamEnabled,
+      streamViewType: dynamoMetadata.streamViewType,
+      billingMode: dynamoMetadata.billingMode,
+      encryptionKeyArn: dynamoMetadata.encryptionKeyArn,
+    };
+  }
+
+  /**
+   * Detect if metadata contains unresolved CDK tokens.
+   */
+  private detectUnresolvedTokens(metadata: any): boolean {
+    const str = JSON.stringify(metadata);
+    return str.includes('${Token[');
+  }
+
+  /**
+   * Generate a UUID v4 for operation tracking.
+   */
+  private generateUuid(): string {
+    return crypto.randomUUID();
+  }
+
+  /**
+   * Apply snapshot cache policy based on CDK context.
+   * 
+   * Checks the `chaimSnapshotCachePolicy` context value:
+   * - NONE (default): No cleanup
+   * - PRUNE_STACK: Delete existing stack snapshots before writing new ones
+   * 
+   * This runs once per stack (tracked by static flag) to avoid
+   * multiple cleanup attempts when binding multiple entities.
+   */
+  private applySnapshotCachePolicy(params: {
+    accountId: string;
+    region: string;
+    stackName: string;
+  }): void {
+    // Get policy from CDK context (defaults to NONE)
+    const policyValue = this.node.tryGetContext(SNAPSHOT_CACHE_POLICY_CONTEXT_KEY);
+    const policy = this.parseSnapshotCachePolicy(policyValue);
+
+    if (policy === SnapshotCachePolicy.NONE) {
+      return; // No cleanup
+    }
+
+    // Check if we've already cleaned this stack in this synth
+    const stack = cdk.Stack.of(this);
+    const cleanupKey = `__chaim_snapshot_cleanup_${params.stackName}`;
+    
+    if ((stack.node as any)[cleanupKey]) {
+      return; // Already cleaned in this synth
+    }
+
+    // Mark as cleaned to avoid duplicate cleanup
+    (stack.node as any)[cleanupKey] = true;
+
+    if (policy === SnapshotCachePolicy.PRUNE_STACK) {
+      const result = pruneStackSnapshots({
+        accountId: params.accountId,
+        region: params.region,
+        stackName: params.stackName,
+        verbose: false, // Don't spam console during synth
+      });
+
+      // Only log if verbose mode or errors
+      if (result.deletedCount > 0 || result.errors.length > 0) {
+        console.log(`[Chaim] Pruned ${result.deletedCount} snapshot(s) for stack: ${params.stackName}`);
+        
+        if (result.errors.length > 0) {
+          console.warn(`[Chaim] Cleanup warnings:`, result.errors);
+        }
+      }
+    }
+  }
+
+  /**
+   * Parse snapshot cache policy from context value.
+   */
+  private parseSnapshotCachePolicy(value: unknown): SnapshotCachePolicy {
+    if (typeof value !== 'string') {
+      return DEFAULT_SNAPSHOT_CACHE_POLICY;
+    }
+
+    const upperValue = value.toUpperCase();
+    
+    if (upperValue === 'NONE' || upperValue === 'DISABLED') {
+      return SnapshotCachePolicy.NONE;
+    }
+    
+    if (upperValue === 'PRUNE_STACK' || upperValue === 'PRUNE') {
+      return SnapshotCachePolicy.PRUNE_STACK;
+    }
+
+    console.warn(
+      `[Chaim] Unknown chaimSnapshotCachePolicy: "${value}". ` +
+      `Valid values: NONE, PRUNE_STACK. Defaulting to NONE.`
+    );
+    
+    return DEFAULT_SNAPSHOT_CACHE_POLICY;
+  }
+
+  /**
+   * Extract stack name from stableResourceKey.
+   * Format: dynamodb:path:StackName/ResourceName
+   */
+  private extractStackNameFromResourceKey(stableResourceKey: string): string {
+    const match = stableResourceKey.match(/path:([^/]+)/);
+    return match ? match[1] : 'unknown';
   }
 
   /**
@@ -276,21 +479,23 @@ export abstract class BaseChaimBinder extends Construct {
    * @returns The path where snapshot was written
    */
   private writeLocalSnapshotToDisk(snapshot: LocalSnapshotPayload): string {
+    const stackName = this.extractStackNameFromResourceKey(snapshot.identity.stableResourceKey);
+    
     const dir = getSnapshotDir({
-      accountId: snapshot.accountId,
-      region: snapshot.region,
-      stackName: snapshot.stackName,
-      datastoreType: snapshot.datastoreType,
+      accountId: snapshot.providerIdentity.accountId,
+      region: snapshot.providerIdentity.region,
+      stackName,
+      datastoreType: snapshot.resource.type,
     });
     
     ensureDirExists(dir);
     
     const filePath = getLocalSnapshotPath({
-      accountId: snapshot.accountId,
-      region: snapshot.region,
-      stackName: snapshot.stackName,
-      datastoreType: snapshot.datastoreType,
-      resourceId: snapshot.resourceId,
+      accountId: snapshot.providerIdentity.accountId,
+      region: snapshot.providerIdentity.region,
+      stackName,
+      datastoreType: snapshot.resource.type,
+      resourceId: snapshot.identity.resourceId,
     });
     
     fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');

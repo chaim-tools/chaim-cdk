@@ -33,7 +33,12 @@ export {
 // Snapshot payload types
 export {
   LocalSnapshotPayload,
+  PublishedSnapshotPayload,
   StackContext,
+  OperationMetadata,
+  DeleteMetadata,
+  HashMetadata,
+  ProducerMetadata,
   IngestResponse,
   CustomResourceResponseData,
 } from './types/snapshot-payload';

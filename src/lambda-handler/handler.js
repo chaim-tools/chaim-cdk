@@ -33,12 +33,75 @@ const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024; // 10MB
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 /**
+ * Infer deletion reason from CloudFormation event metadata.
+ * 
+ * This function attempts to determine why a resource is being deleted by analyzing
+ * the CloudFormation event. If the reason cannot be confidently determined from
+ * the available metadata, it defaults to 'BINDER_REMOVED' as the most common case.
+ * 
+ * Inference strategy:
+ * 1. Check for stack deletion indicators in ResourceProperties
+ * 2. Check for explicit resource removal patterns
+ * 3. Fall back to BINDER_REMOVED (default) for uncertain cases
+ * 
+ * @param {Object} event - CloudFormation custom resource event
+ * @param {Object} snapshotPayload - The original snapshot payload
+ * @returns {Object} { reason, scope } - Deletion context
+ */
+function inferDeletionContext(event, snapshotPayload) {
+  // Strategy 1: Check if entire stack is being deleted
+  // CloudFormation may include StackStatus in ResourceProperties for some events
+  const stackStatus = event.ResourceProperties?.StackStatus;
+  
+  if (stackStatus && stackStatus.includes('DELETE')) {
+    return {
+      reason: 'STACK_DELETED',
+      scope: 'BINDING', // When stack is deleted, binding is removed
+    };
+  }
+  
+  // Strategy 2: Check for explicit resource removal indicators
+  // The LogicalResourceId pattern can sometimes indicate the operation type
+  const logicalResourceId = event.LogicalResourceId;
+  if (logicalResourceId && logicalResourceId.includes('IngestionResource')) {
+    // This is our custom resource being explicitly removed
+    return {
+      reason: 'BINDER_REMOVED',
+      scope: 'BINDING',
+    };
+  }
+  
+  // Strategy 3: FALLBACK - Default to BINDER_REMOVED
+  // This is the most common case when a ChaimBinder construct is removed from the CDK app
+  // We default to this when we cannot confidently determine the reason from CF metadata
+  console.log('Could not confidently determine deletion reason from CF event - defaulting to BINDER_REMOVED');
+  return {
+    reason: 'BINDER_REMOVED',
+    scope: 'BINDING',
+  };
+}
+
+/**
+ * Get package version from embedded metadata in snapshot.
+ * Falls back to a default if not available.
+ */
+function getPackageVersion(snapshotPayload) {
+  // Check if snapshot has embedded version
+  if (snapshotPayload._packageVersion) {
+    return snapshotPayload._packageVersion;
+  }
+  // Fallback to a default version
+  return '0.2.0';
+}
+
+/**
  * Lambda handler entry point.
  */
 exports.handler = async (event, context) => {
   console.log('CloudFormation Event:', JSON.stringify(event, null, 2));
   
   const requestType = event.RequestType; // 'Create', 'Update', or 'Delete'
+  const cfRequestId = event.RequestId; // CloudFormation RequestId
   const failureMode = process.env.FAILURE_MODE || 'BEST_EFFORT';
   const apiBaseUrl = process.env.CHAIM_API_BASE_URL || DEFAULT_API_BASE_URL;
   const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || String(DEFAULT_MAX_SNAPSHOT_BYTES), 10);
@@ -52,8 +115,21 @@ exports.handler = async (event, context) => {
     const snapshotBytes = fs.readFileSync('./snapshot.json', 'utf-8');
     const snapshotPayload = JSON.parse(snapshotBytes);
     
-    // Compute contentHash (SHA-256 of snapshot bytes)
-    contentHash = 'sha256:' + crypto.createHash('sha256').update(snapshotBytes).digest('hex');
+    // Build operation metadata (common for all request types)
+    const operation = {
+      eventId,
+      cfRequestId,
+      requestType,
+      failureMode,
+    };
+    
+    // Build producer metadata
+    const producer = {
+      component: 'chaim-cdk',
+      version: getPackageVersion(snapshotPayload),
+      runtime: 'nodejs20.x',
+      mode: 'PUBLISHED',
+    };
     
     if (requestType === 'Delete') {
       // DELETE flow: Send DELETE snapshot through presigned upload
@@ -61,16 +137,48 @@ exports.handler = async (event, context) => {
       console.log('Resource:', snapshotPayload.resourceId);
       console.log('Entity:', snapshotPayload.identity?.entityName);
       
-      // Build DELETE snapshot (set action to DELETE, schema to null)
+      // Infer deletion context
+      const deleteContext = inferDeletionContext(event, snapshotPayload);
+      const deletedAt = new Date().toISOString();
+      
+      console.log('Deletion reason:', deleteContext.reason);
+      console.log('Deletion scope:', deleteContext.scope);
+      
+      // Build DELETE snapshot with enhanced metadata
+      // Remove internal fields before publishing
+      const { _schemaHash, _packageVersion, ...cleanPayload } = snapshotPayload;
+      
       const deleteSnapshot = {
-        ...snapshotPayload,
+        ...cleanPayload,
         action: 'DELETE',
         schema: null, // Schema not needed for deletion
-        capturedAt: new Date().toISOString(), // Update timestamp
+        capturedAt: deletedAt,
+        
+        // NEW: Add operation metadata
+        operation,
+        
+        // NEW: Add delete metadata
+        delete: {
+          reason: deleteContext.reason,
+          scope: deleteContext.scope,
+          deletedAt,
+        },
+        
+        // NEW: Add producer metadata
+        producer,
       };
       
       const deleteSnapshotBytes = JSON.stringify(deleteSnapshot, null, 2);
+      
+      // NEW: Compute hashes
       const deleteContentHash = 'sha256:' + crypto.createHash('sha256').update(deleteSnapshotBytes).digest('hex');
+      
+      deleteSnapshot.hashes = {
+        contentHash: deleteContentHash,
+        // No schemaHash for DELETE (schema is null)
+      };
+      
+      const finalDeleteBytes = JSON.stringify(deleteSnapshot, null, 2);
       
       console.log('Sending DELETE snapshot through presigned upload...');
       
@@ -93,23 +201,58 @@ exports.handler = async (event, context) => {
       
       // Step 2: Upload DELETE snapshot bytes to S3
       console.log('Step 2: Uploading DELETE snapshot to S3...');
-      await uploadToS3(uploadUrl, deleteSnapshotBytes);
+      await uploadToS3(uploadUrl, finalDeleteBytes);
       console.log('DELETE snapshot uploaded to S3 successfully');
       console.log('S3 Key:', presignResponse.s3Key);
       
       console.log('Entity marked as deleted successfully');
-      return buildResponse(eventId, 'SUCCESS', 'DELETE', deleteSnapshot.capturedAt, deleteContentHash);
+      return buildResponse(eventId, 'SUCCESS', 'DELETE', deletedAt, deleteContentHash);
     }
     
     // CREATE/UPDATE flow: presigned upload
     console.log('Processing Create/Update request - executing ingestion workflow');
     console.log('EventId:', eventId);
+    
+    // Remove internal fields before publishing
+    const { _schemaHash, _packageVersion, ...cleanPayload } = snapshotPayload;
+    
+    // Add operation and producer metadata to snapshot
+    const enhancedSnapshot = {
+      ...cleanPayload,
+      operation,
+      producer,
+    };
+    
+    const enhancedSnapshotBytes = JSON.stringify(enhancedSnapshot, null, 2);
+    
+    // Compute hashes
+    contentHash = 'sha256:' + crypto.createHash('sha256').update(enhancedSnapshotBytes).digest('hex');
+    
+    // Compute schemaHash if schema exists (use pre-computed from synth if available)
+    let schemaHash;
+    if (snapshotPayload._schemaHash) {
+      schemaHash = snapshotPayload._schemaHash;
+    } else if (snapshotPayload.schema) {
+      const schemaBytes = JSON.stringify(snapshotPayload.schema);
+      schemaHash = 'sha256:' + crypto.createHash('sha256').update(schemaBytes).digest('hex');
+    }
+    
+    enhancedSnapshot.hashes = {
+      contentHash,
+      schemaHash,
+    };
+    
+    const finalSnapshotBytes = JSON.stringify(enhancedSnapshot, null, 2);
+    
     console.log('ContentHash:', contentHash);
+    if (schemaHash) {
+      console.log('SchemaHash:', schemaHash);
+    }
     
     // Validate snapshot size
-    if (snapshotBytes.length > maxSnapshotBytes) {
+    if (finalSnapshotBytes.length > maxSnapshotBytes) {
       throw new Error(
-        `Snapshot size (${snapshotBytes.length} bytes) exceeds maximum allowed (${maxSnapshotBytes} bytes)`
+        `Snapshot size (${finalSnapshotBytes.length} bytes) exceeds maximum allowed (${maxSnapshotBytes} bytes)`
       );
     }
     
@@ -124,7 +267,7 @@ exports.handler = async (event, context) => {
       apiSecret,
       appId: snapshotPayload.appId,
       eventId,
-      contentHash,
+      contentHash: enhancedSnapshot.hashes.contentHash,
     });
     
     const { uploadUrl } = presignResponse;
@@ -132,7 +275,7 @@ exports.handler = async (event, context) => {
     
     // Step 2: Upload snapshot bytes to S3
     console.log('Step 2: Uploading snapshot to S3...');
-    await uploadToS3(uploadUrl, snapshotBytes);
+    await uploadToS3(uploadUrl, finalSnapshotBytes);
     console.log('Snapshot uploaded to S3 successfully');
     console.log('S3 Key:', presignResponse.s3Key);
     

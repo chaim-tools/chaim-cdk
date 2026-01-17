@@ -6,17 +6,8 @@ export interface BaseDataStoreMetadata {
   /** Data store type identifier */
   readonly type: string;
 
-  /** AWS ARN of the data store resource */
-  readonly arn: string;
-
-  /** Resource name */
-  readonly name: string;
-
   /** AWS region */
   readonly region: string;
-
-  /** AWS account ID */
-  readonly account: string;
 
   /** Encryption key ARN (if configured) */
   readonly encryptionKeyArn?: string;
@@ -24,6 +15,11 @@ export interface BaseDataStoreMetadata {
 
 /**
  * DynamoDB table metadata captured during binding.
+ * 
+ * Note: Removed duplicate fields from v1.1:
+ * - arn (use tableArn instead - globally unique)
+ * - name (use tableName instead)
+ * - account (use top-level accountId instead)
  */
 export interface DynamoDBMetadata extends BaseDataStoreMetadata {
   readonly type: 'dynamodb';
@@ -31,7 +27,7 @@ export interface DynamoDBMetadata extends BaseDataStoreMetadata {
   /** Table name */
   readonly tableName: string;
 
-  /** Table ARN */
+  /** Table ARN (globally unique identifier) */
   readonly tableArn: string;
 
   /** Partition key attribute name */

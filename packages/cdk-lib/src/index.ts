@@ -33,7 +33,15 @@ export {
 // Snapshot payload types
 export {
   LocalSnapshotPayload,
-  StackContext,
+  PublishedSnapshotPayload,
+  ProviderIdentity,
+  BindingIdentity,
+  OperationMetadata,
+  ResolutionMetadata,
+  DeleteMetadata,
+  HashMetadata,
+  ResourceMetadata,
+  ProducerMetadata,
   IngestResponse,
   CustomResourceResponseData,
 } from './types/snapshot-payload';
@@ -67,6 +75,18 @@ export {
   INGESTION_ENDPOINTS,
   DEFAULT_INGESTION_CONFIG,
 } from './services/ingestion-service';
+export {
+  pruneStackSnapshots,
+  pruneOldSnapshots,
+  CleanupOptions,
+  TTLCleanupOptions,
+  CleanupResult,
+} from './services/snapshot-cleanup';
+export {
+  SnapshotCachePolicy,
+  DEFAULT_SNAPSHOT_CACHE_POLICY,
+  SNAPSHOT_CACHE_POLICY_CONTEXT_KEY,
+} from './types/snapshot-cache-policy';
 
 // Re-export schema types from bprint-spec for convenience
 export { SchemaData, Field, PrimaryKey } from '@chaim-tools/chaim-bprint-spec';

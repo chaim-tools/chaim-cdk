@@ -56,46 +56,41 @@ describe('stable-identity', () => {
 
   describe('buildMatchKey', () => {
     it('should build match key from identity fields', () => {
-      const identity: StableIdentity = {
+      const result = buildMatchKey({
         appId: 'my-app',
         stackName: 'MyStack',
         datastoreType: 'dynamodb',
         entityName: 'User',
-        stableResourceKey: 'tableName:UsersTable',
-      };
-
-      const result = buildMatchKey(identity);
-      expect(result).toBe('my-app:MyStack:dynamodb:User:tableName:UsersTable');
+        stableResourceKey: 'dynamodb:tableName:UsersTable',
+      });
+      expect(result).toBe('my-app:MyStack:dynamodb:User:dynamodb:tableName:UsersTable');
     });
 
     it('should handle identity with path-based key', () => {
-      const identity: StableIdentity = {
+      const result = buildMatchKey({
         appId: 'app',
         stackName: 'Stack',
         datastoreType: 'dynamodb',
         entityName: 'Entity',
-        stableResourceKey: 'path:Stack/Construct/Table',
-      };
-
-      const result = buildMatchKey(identity);
-      expect(result).toBe('app:Stack:dynamodb:Entity:path:Stack/Construct/Table');
+        stableResourceKey: 'dynamodb:path:Stack/Construct/Table',
+      });
+      expect(result).toBe('app:Stack:dynamodb:Entity:dynamodb:path:Stack/Construct/Table');
     });
   });
 
   describe('generateResourceId', () => {
-    const baseIdentity: StableIdentity = {
-      appId: 'my-app',
-      stackName: 'MyStack',
-      datastoreType: 'dynamodb',
-      entityName: 'User',
-      stableResourceKey: 'tableName:UsersTable',
-    };
-
     it('should generate base resource ID when no file exists', () => {
       (fs.existsSync as any).mockReturnValue(false);
 
       const result = generateResourceId(
-        { resourceName: 'UsersTable', entityName: 'User', identity: baseIdentity },
+        {
+          resourceName: 'UsersTable',
+          entityName: 'User',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 
@@ -104,14 +99,27 @@ describe('stable-identity', () => {
 
     it('should return same ID when existing file has matching identity', () => {
       const existingSnapshot = {
-        identity: baseIdentity,
+        appId: 'my-app',
+        stackName: 'MyStack',
+        datastoreType: 'dynamodb',
+        schema: { entityName: 'User' },
+        identity: {
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
       };
 
       (fs.existsSync as any).mockReturnValue(true);
       (fs.readFileSync as any).mockReturnValue(JSON.stringify(existingSnapshot));
 
       const result = generateResourceId(
-        { resourceName: 'UsersTable', entityName: 'User', identity: baseIdentity },
+        {
+          resourceName: 'UsersTable',
+          entityName: 'User',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 
@@ -119,12 +127,14 @@ describe('stable-identity', () => {
     });
 
     it('should allocate suffix when existing file has different identity', () => {
-      const existingIdentity: StableIdentity = {
-        ...baseIdentity,
-        stableResourceKey: 'tableName:DifferentTable', // Different resource
-      };
       const existingSnapshot = {
-        identity: existingIdentity,
+        appId: 'my-app',
+        stackName: 'MyStack',
+        datastoreType: 'dynamodb',
+        schema: { entityName: 'User' },
+        identity: {
+          stableResourceKey: 'dynamodb:tableName:DifferentTable', // Different resource
+        },
       };
 
       // First file exists with different identity
@@ -137,7 +147,14 @@ describe('stable-identity', () => {
       (fs.readFileSync as any).mockReturnValue(JSON.stringify(existingSnapshot));
 
       const result = generateResourceId(
-        { resourceName: 'UsersTable', entityName: 'User', identity: baseIdentity },
+        {
+          resourceName: 'UsersTable',
+          entityName: 'User',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 
@@ -158,7 +175,14 @@ describe('stable-identity', () => {
       (fs.readFileSync as any).mockReturnValue(JSON.stringify(existingSnapshot));
 
       const result = generateResourceId(
-        { resourceName: 'Table', entityName: 'Entity', identity: baseIdentity },
+        {
+          resourceName: 'Table',
+          entityName: 'Entity',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 
@@ -176,7 +200,14 @@ describe('stable-identity', () => {
       });
 
       const result = generateResourceId(
-        { resourceName: 'Table', entityName: 'Entity', identity: baseIdentity },
+        {
+          resourceName: 'Table',
+          entityName: 'Entity',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 
@@ -185,13 +216,23 @@ describe('stable-identity', () => {
     });
 
     it('should continue allocating suffixes for multiple collisions', () => {
-      const differentIdentity1: StableIdentity = {
-        ...baseIdentity,
-        stableResourceKey: 'path:Different/Path/1',
+      const existingSnapshot1 = {
+        appId: 'my-app',
+        stackName: 'MyStack',
+        datastoreType: 'dynamodb',
+        schema: { entityName: 'Entity' },
+        identity: {
+          stableResourceKey: 'dynamodb:path:Different/Path/1',
+        },
       };
-      const differentIdentity2: StableIdentity = {
-        ...baseIdentity,
-        stableResourceKey: 'path:Different/Path/2',
+      const existingSnapshot2 = {
+        appId: 'my-app',
+        stackName: 'MyStack',
+        datastoreType: 'dynamodb',
+        schema: { entityName: 'Entity' },
+        identity: {
+          stableResourceKey: 'dynamodb:path:Different/Path/2',
+        },
       };
 
       let callCount = 0;
@@ -200,11 +241,18 @@ describe('stable-identity', () => {
         return callCount <= 2; // First two exist, third doesn't
       });
       (fs.readFileSync as any)
-        .mockReturnValueOnce(JSON.stringify({ identity: differentIdentity1 }))
-        .mockReturnValueOnce(JSON.stringify({ identity: differentIdentity2 }));
+        .mockReturnValueOnce(JSON.stringify(existingSnapshot1))
+        .mockReturnValueOnce(JSON.stringify(existingSnapshot2));
 
       const result = generateResourceId(
-        { resourceName: 'Table', entityName: 'Entity', identity: baseIdentity },
+        {
+          resourceName: 'Table',
+          entityName: 'Entity',
+          appId: 'my-app',
+          stackName: 'MyStack',
+          datastoreType: 'dynamodb',
+          stableResourceKey: 'dynamodb:tableName:UsersTable',
+        },
         '/cache/dir'
       );
 

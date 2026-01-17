@@ -64,6 +64,30 @@ export class ConsumerStack extends cdk.Stack {
     });
 
     // ===========================================
+    // Table 3: Test Schemas - Constraints and Annotations Examples
+    // ===========================================
+    const testTable = new dynamodb.Table(this, 'TestTable', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // UserAccount entity with constraints
+    new ChaimDynamoDBBinder(this, 'UserAccountBinding', {
+      schemaPath: path.join(__dirname, '..', 'schemas', 'user-with-constraints.bprint'),
+      table: testTable,
+      config: usersConfig, // Reuse users config for simplicity
+    });
+
+    // Product entity with annotations
+    new ChaimDynamoDBBinder(this, 'ProductBinding', {
+      schemaPath: path.join(__dirname, '..', 'schemas', 'product-with-annotations.bprint'),
+      table: testTable,
+      config: usersConfig, // Reuse users config for simplicity
+    });
+
+    // ===========================================
     // Outputs
     // ===========================================
     new cdk.CfnOutput(this, 'UsersTableName', {

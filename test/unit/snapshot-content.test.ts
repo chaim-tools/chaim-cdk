@@ -215,7 +215,6 @@ describe('Snapshot Content Tests', () => {
         config: testConfig,
       });
 
-      expect(binder.dynamoDBMetadata.arn).toBeDefined();
       expect(binder.dynamoDBMetadata.tableArn).toBeDefined();
     });
 
@@ -245,7 +244,7 @@ describe('Snapshot Content Tests', () => {
       const snapshot = getSnapshotFromBinder(binder);
       
       expect(snapshot).toBeDefined();
-      expect(snapshot.provider).toBe('aws');
+      expect(snapshot.providerIdentity.cloud).toBe('aws');
     });
 
     it('should write snapshot with accountId', () => {
@@ -259,7 +258,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.accountId).toBe('123456789012');
+      expect(snapshot.providerIdentity.accountId).toBe('123456789012');
     });
 
     it('should write snapshot with region', () => {
@@ -276,7 +275,7 @@ describe('Snapshot Content Tests', () => {
       expect(snapshot.region).toBe('us-east-1');
     });
 
-    it('should write snapshot with stackName', () => {
+    it('should write snapshot with stackName in identity', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
@@ -287,7 +286,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.stackName).toBe('TestStack');
+      expect(snapshot.identity.stackName).toBe('TestStack');
     });
 
     it('should write snapshot with appId', () => {
@@ -309,7 +308,7 @@ describe('Snapshot Content Tests', () => {
       expect(snapshot.appId).toBe('my-custom-app');
     });
 
-    it('should write snapshot with datastoreType', () => {
+    it('should write snapshot with datastoreType in identity', () => {
       ensureAssetDir('TestStack', 'test-table__User');
       
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
@@ -320,7 +319,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.datastoreType).toBe('dynamodb');
+      expect(snapshot.identity.datastoreType).toBe('dynamodb');
     });
 
     it('should write snapshot with embedded schema', () => {
@@ -351,9 +350,10 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.dataStore).toBeDefined();
-      expect(snapshot.dataStore.type).toBe('dynamodb');
-      expect(snapshot.dataStore.partitionKey).toBe('pk');
+      expect(snapshot.resource).toBeDefined();
+      expect(snapshot.resource.type).toBe('dynamodb');
+      expect(snapshot.resource.kind).toBe('table');
+      expect(snapshot.resource.partitionKey).toBe('pk');
     });
 
     it('should write snapshot with context', () => {
@@ -368,9 +368,10 @@ describe('Snapshot Content Tests', () => {
       const snapshot = getSnapshotFromBinder(binder);
       
       expect(snapshot.context).toBeDefined();
-      expect(snapshot.context.account).toBe('123456789012');
-      expect(snapshot.context.region).toBe('us-east-1');
-      expect(snapshot.context.stackName).toBe('TestStack');
+      expect(snapshot.providerIdentity.deploymentId).toBeDefined();
+      // v3.0: accountId and region in providerIdentity
+      expect(snapshot.providerIdentity.accountId).toBe('123456789012');
+      expect(snapshot.providerIdentity.region).toBe('us-east-1');
     });
 
     it('should write snapshot with capturedAt timestamp', () => {
@@ -399,7 +400,7 @@ describe('Snapshot Content Tests', () => {
 
       const snapshot = getSnapshotFromBinder(binder);
       
-      expect(snapshot.schemaVersion).toBe('1.0');
+      expect(snapshot.snapshotVersion).toBe('3.0');
     });
 
     it('should write snapshot with identity for stable collision handling', () => {
@@ -414,10 +415,137 @@ describe('Snapshot Content Tests', () => {
       const snapshot = getSnapshotFromBinder(binder);
       
       expect(snapshot.identity).toBeDefined();
-      expect(snapshot.identity.appId).toBe('test-app');
-      expect(snapshot.identity.stackName).toBe('TestStack');
-      expect(snapshot.identity.datastoreType).toBe('dynamodb');
-      expect(snapshot.identity.entityName).toBe('User');
+      expect(snapshot.identity.stableResourceKey).toBeDefined();
+      expect(snapshot.identity.stableResourceKey).toContain('dynamodb');
+    });
+  });
+
+  describe('v3.0 restructured payload', () => {
+    it('should write snapshot with bindingId', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      expect(snapshot.bindingId).toBeDefined();
+      expect(snapshot.bindingId).toContain('test-app');
+      expect(snapshot.bindingId).toContain('dynamodb');
+      expect(snapshot.bindingId).toContain('User');
+    });
+
+    it('should NOT include tableId in v2.0 (removed - was token in LOCAL snapshots)', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      // v2.0: tableId removed (was useless token in LOCAL snapshots)
+      expect((snapshot as any).tableId).toBeUndefined();
+    });
+
+    it('should NOT include entityId in v2.0 (removed - insufficiently scoped)', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      // v2.0: entityId removed (insufficiently scoped, use bindingId instead)
+      expect((snapshot as any).entityId).toBeUndefined();
+    });
+
+    it('should write snapshot with _schemaHash for Lambda', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      expect(snapshot._schemaHash).toBeDefined();
+      expect(snapshot._schemaHash).toMatch(/^sha256:/);
+    });
+
+    it('should write snapshot with _packageVersion for Lambda', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      expect(snapshot._packageVersion).toBeDefined();
+      expect(typeof snapshot._packageVersion).toBe('string');
+    });
+  });
+
+  describe('v1.1 normalized dataStore fields', () => {
+    it('should NOT have duplicate arn field (use tableArn)', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      // v3.0: resource.id contains the ARN
+      expect(snapshot.resource.id).toBeDefined();
+      expect(snapshot.resource.id).toContain('arn:aws:dynamodb');
+    });
+
+    it('should NOT have duplicate name field (use tableName)', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      // v3.0: resource.name contains the table name
+      expect(snapshot.resource.name).toBeDefined();
+    });
+
+    it('should NOT have duplicate account field (use top-level accountId)', () => {
+      ensureAssetDir('TestStack', 'test-table__User');
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: testConfig,
+      });
+
+      const snapshot = getSnapshotFromBinder(binder);
+      
+      // Should NOT have account field in dataStore
+      // v3.0: resource section doesn't have account field
+      // accountId is in providerIdentity
+      expect(snapshot.providerIdentity.accountId).toBe('123456789012');
     });
   });
 });

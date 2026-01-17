@@ -7,16 +7,12 @@ import { Construct } from 'constructs';
 /**
  * Stable identity for collision detection.
  * Uses synth-stable fields only (no tokens).
+ * 
+ * Note: This only contains the unique stableResourceKey.
+ * Other identity fields (appId, stackName, datastoreType, entityName)
+ * are stored at the top level of the snapshot to avoid redundancy.
  */
 export interface StableIdentity {
-  /** Application ID (user input, always stable) */
-  readonly appId: string;
-  /** CDK stack name */
-  readonly stackName: string;
-  /** Data store type (e.g., 'dynamodb') */
-  readonly datastoreType: string;
-  /** Entity name from schema */
-  readonly entityName: string;
   /** Best available stable resource key */
   readonly stableResourceKey: string;
 }
@@ -35,23 +31,29 @@ export function isToken(value: string | undefined): boolean {
 /**
  * Get the best available stable resource key for collision detection.
  * 
+ * The key is namespaced with the datastore type to prevent collisions
+ * across different datastore types and enable use as a graph node key.
+ * 
+ * Format: `{datastoreType}:{qualifier}:{value}`
+ * 
  * Preference chain:
- * 1. Physical table name (if not a token) => `tableName:<name>`
- * 2. CloudFormation logical ID (via correct CDK API) => `logicalId:<id>`
- * 3. Construct path (always available) => `path:<path>`
+ * 1. Physical table name (if not a token) => `{datastoreType}:tableName:<name>`
+ * 2. CloudFormation logical ID (via correct CDK API) => `{datastoreType}:logicalId:<id>`
+ * 3. Construct path (always available) => `{datastoreType}:path:<path>`
  * 
  * Note: resourceName is display-only; do not use as physical identity.
  * logicalId/physicalName may be unavailable; fallback to constructPath.
  */
 export function getStableResourceKey(
   table: dynamodb.ITable,
-  construct: Construct
+  construct: Construct,
+  datastoreType: string
 ): string {
   // 1. Prefer physical table name (actual DynamoDB table name, not user label)
   try {
     const tableName = table.tableName;
     if (tableName && !isToken(tableName)) {
-      return `tableName:${tableName}`;
+      return `${datastoreType}:tableName:${tableName}`;
     }
   } catch {
     // tableName may not be accessible
@@ -64,7 +66,7 @@ export function getStableResourceKey(
     if (cfn) {
       const logicalId = stack.getLogicalId(cfn);
       if (logicalId && !isToken(logicalId)) {
-        return `logicalId:${logicalId}`;
+        return `${datastoreType}:logicalId:${logicalId}`;
       }
     }
   } catch {
@@ -72,15 +74,21 @@ export function getStableResourceKey(
   }
   
   // 3. Fallback to construct path (always available)
-  return `path:${construct.node.path}`;
+  return `${datastoreType}:path:${construct.node.path}`;
 }
 
 /**
  * Build a match key string from stable identity fields.
  * Used for collision detection.
  */
-export function buildMatchKey(identity: StableIdentity): string {
-  return `${identity.appId}:${identity.stackName}:${identity.datastoreType}:${identity.entityName}:${identity.stableResourceKey}`;
+export function buildMatchKey(params: {
+  appId: string;
+  stackName: string;
+  datastoreType: string;
+  entityName: string;
+  stableResourceKey: string;
+}): string {
+  return `${params.appId}:${params.stackName}:${params.datastoreType}:${params.entityName}:${params.stableResourceKey}`;
 }
 
 /**
@@ -91,8 +99,14 @@ export interface GenerateResourceIdParams {
   resourceName: string;
   /** Entity name from schema */
   entityName: string;
-  /** Stable identity for collision matching */
-  identity: StableIdentity;
+  /** Application ID */
+  appId: string;
+  /** Stack name */
+  stackName: string;
+  /** Datastore type */
+  datastoreType: string;
+  /** Stable resource key */
+  stableResourceKey: string;
 }
 
 /**
@@ -110,9 +124,9 @@ export function generateResourceId(
   params: GenerateResourceIdParams,
   cacheDir: string
 ): string {
-  const { resourceName, entityName, identity } = params;
+  const { resourceName, entityName, appId, stackName, datastoreType, stableResourceKey } = params;
   const baseId = `${resourceName}__${entityName}`;
-  const matchKey = buildMatchKey(identity);
+  const matchKey = buildMatchKey({ appId, stackName, datastoreType, entityName, stableResourceKey });
   
   let candidateId = baseId;
   let suffix = 1;
@@ -130,14 +144,27 @@ export function generateResourceId(
       const existingContent = fs.readFileSync(filePath, 'utf-8');
       const existing = JSON.parse(existingContent);
       
-      // If existing snapshot lacks identity, treat as non-match (never overwrite)
-      if (!existing.identity || !existing.identity.stableResourceKey) {
+      // Extract fields from top-level (new format) or fallback to nested (old format)
+      const existingAppId = existing.appId || existing.identity?.appId;
+      const existingStackName = existing.stackName || existing.identity?.stackName;
+      const existingDatastoreType = existing.datastoreType || existing.identity?.datastoreType;
+      const existingEntityName = existing.schema?.entityName || existing.identity?.entityName;
+      const existingStableResourceKey = existing.identity?.stableResourceKey;
+      
+      // If existing snapshot lacks required fields, treat as non-match (never overwrite)
+      if (!existingStableResourceKey || !existingAppId || !existingStackName || !existingDatastoreType || !existingEntityName) {
         suffix++;
         candidateId = `${baseId}__${suffix}`;
         continue;
       }
       
-      const existingKey = buildMatchKey(existing.identity);
+      const existingKey = buildMatchKey({
+        appId: existingAppId,
+        stackName: existingStackName,
+        datastoreType: existingDatastoreType,
+        entityName: existingEntityName,
+        stableResourceKey: existingStableResourceKey,
+      });
       
       if (existingKey === matchKey) {
         return candidateId; // Same resource, overwrite

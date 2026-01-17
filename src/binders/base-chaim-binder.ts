@@ -6,6 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 import { SchemaData } from '@chaim-tools/chaim-bprint-spec';
 import { BaseBinderProps, validateBinderProps } from '../types/base-binder-props';
@@ -100,19 +101,22 @@ export abstract class BaseChaimBinder extends Construct {
     const entityName = this.getEntityName();
 
     // Build stable identity for collision detection
-    const stableResourceKey = this.computeStableResourceKey();
+    const stableResourceKey = this.computeStableResourceKey(datastoreType);
     const identity: StableIdentity = {
-      appId: this.config.appId,
-      stackName,
-      datastoreType,
-      entityName,
       stableResourceKey,
     };
 
     // Determine cache directory and generate resource ID with collision handling
     const cacheDir = getSnapshotDir({ accountId, region, stackName, datastoreType });
     ensureDirExists(cacheDir);
-    this.resourceId = generateResourceId({ resourceName, entityName, identity }, cacheDir);
+    this.resourceId = generateResourceId({
+      resourceName,
+      entityName,
+      appId: this.config.appId,
+      stackName,
+      datastoreType,
+      stableResourceKey,
+    }, cacheDir);
 
     // Build LOCAL snapshot payload
     const localSnapshot = this.buildLocalSnapshot({
@@ -222,18 +226,22 @@ export abstract class BaseChaimBinder extends Construct {
   }
 
   /**
-   * Compute the stable resource key for collision detection.
+   * Compute the best available stable resource key for collision detection.
+   * Preference: physical table name > logical ID > construct path.
+   * 
+   * The key is namespaced with datastoreType to prevent collisions across
+   * different datastore types.
    * 
    * Note: resourceName is display-only; do not use as physical identity.
    * logicalId/physicalName may be unavailable; fallback to constructPath.
    */
-  private computeStableResourceKey(): string {
+  private computeStableResourceKey(datastoreType: string): string {
     const table = this.getTable();
     if (table) {
-      return getStableResourceKey(table, this);
+      return getStableResourceKey(table, this, datastoreType);
     }
     // No table available - use construct path as fallback
-    return `path:${this.node.path}`;
+    return `${datastoreType}:path:${this.node.path}`;
   }
 
   /**
@@ -271,21 +279,70 @@ export abstract class BaseChaimBinder extends Construct {
   }
 
   /**
-   * Build the base snapshot context (shared across snapshots).
+   * Read package version from package.json.
+   * Used to populate producer metadata in snapshots.
    */
-  private buildStackContext(): StackContext {
-    const stack = cdk.Stack.of(this);
+  private getPackageVersion(): string {
+    try {
+      const packagePath = path.join(__dirname, '..', '..', 'package.json');
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+      return packageJson.version || '0.0.0';
+    } catch (error) {
+      console.warn('Failed to read package version:', error);
+      return '0.0.0';
+    }
+  }
+
+  /**
+   * Build resource metadata from dataStore metadata.
+   */
+  private buildResourceMetadata(params: any): any {
+    const dynamoMetadata = this.dataStoreMetadata as any;
+    
     return {
-      account: stack.account,
-      region: stack.region,
-      stackId: stack.stackId,
-      stackName: stack.stackName,
+      type: 'dynamodb',
+      kind: 'table',
+      id: dynamoMetadata.tableArn,
+      name: dynamoMetadata.tableName,
+      region: params.region,
+      partitionKey: dynamoMetadata.partitionKey,
+      sortKey: dynamoMetadata.sortKey,
+      globalSecondaryIndexes: dynamoMetadata.globalSecondaryIndexes,
+      localSecondaryIndexes: dynamoMetadata.localSecondaryIndexes,
+      ttlAttribute: dynamoMetadata.ttlAttribute,
+      streamEnabled: dynamoMetadata.streamEnabled,
+      streamViewType: dynamoMetadata.streamViewType,
+      billingMode: dynamoMetadata.billingMode,
+      encryptionKeyArn: dynamoMetadata.encryptionKeyArn,
     };
   }
 
   /**
-   * Build a LOCAL snapshot payload for CLI consumption.
-   * Does not include eventId or contentHash - those are generated at deploy-time.
+   * Detect if metadata contains unresolved CDK tokens.
+   */
+  private detectUnresolvedTokens(metadata: any): boolean {
+    const str = JSON.stringify(metadata);
+    return str.includes('${Token[');
+  }
+
+  /**
+   * Generate a UUID v4 for operation tracking.
+   */
+  private generateUuid(): string {
+    return crypto.randomUUID();
+  }
+
+  /**
+   * Extract stack name from stableResourceKey.
+   * Format: dynamodb:path:StackName/ResourceName
+   */
+  private extractStackNameFromResourceKey(stableResourceKey: string): string {
+    const match = stableResourceKey.match(/path:([^/]+)/);
+    return match ? match[1] : 'unknown';
+  }
+
+  /**
+   * Build a LOCAL snapshot payload for CLI consumption (v3.0).
    */
   private buildLocalSnapshot(params: {
     accountId: string;
@@ -296,23 +353,77 @@ export abstract class BaseChaimBinder extends Construct {
     identity: StableIdentity;
   }): LocalSnapshotPayload {
     const capturedAt = new Date().toISOString();
+    const stack = cdk.Stack.of(this);
 
-    return {
-      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-      action: 'UPSERT', // Normal operation - create or update entity
-      provider: 'aws',
+    // Build provider identity
+    const providerIdentity = {
+      cloud: 'aws' as const,
       accountId: params.accountId,
       region: params.region,
-      stackName: params.stackName,
-      datastoreType: params.datastoreType,
-      resourceName: params.resourceName,
-      resourceId: this.resourceId,
-      identity: params.identity,
+      deploymentSystem: 'cloudformation' as const,
+      deploymentId: stack.stackId,
+    };
+
+    // Build binding identity (using computed StableIdentity)
+    const stableResourceKey = params.identity.stableResourceKey;
+    const entityId = `${this.config.appId}:${this.schemaData.entityName}`;
+    const bindingId = `${this.config.appId}:${stableResourceKey}:${this.schemaData.entityName}`;
+
+    const identity = {
       appId: this.config.appId,
-      schema: this.schemaData,
-      dataStore: this.dataStoreMetadata,
-      context: this.buildStackContext(),
+      entityName: this.schemaData.entityName,
+      stableResourceKeyStrategy: 'cdk-construct-path' as const,
+      stableResourceKey,
+      resourceId: this.resourceId,
+      entityId,
+      bindingId,
+    };
+
+    // Build operation metadata
+    const operation = {
+      eventId: this.generateUuid(),
+      requestType: 'Create' as const,
+      failureMode: this.config.failureMode,
+    };
+
+    // Build resolution metadata
+    const hasTokens = this.detectUnresolvedTokens(this.dataStoreMetadata);
+    const resolution = {
+      mode: 'LOCAL' as const,
+      hasTokens,
+    };
+
+    // Build hashes
+    const schemaBytes = JSON.stringify(this.schemaData);
+    const schemaHash = 'sha256:' + crypto.createHash('sha256').update(schemaBytes).digest('hex');
+    const hashes = {
+      schemaHash,
+      contentHash: '',
+    };
+
+    // Build resource metadata
+    const resource = this.buildResourceMetadata(params);
+
+    // Build producer metadata
+    const producer = {
+      component: 'chaim-cdk' as const,
+      version: this.getPackageVersion(),
+      runtime: process.version,
+      mode: 'LOCAL' as const,
+    };
+
+    return {
+      snapshotVersion: SNAPSHOT_SCHEMA_VERSION,
+      action: 'UPSERT',
       capturedAt,
+      providerIdentity,
+      identity,
+      operation,
+      resolution,
+      hashes,
+      schema: this.schemaData,
+      resource,
+      producer,
     };
   }
 
@@ -323,19 +434,21 @@ export abstract class BaseChaimBinder extends Construct {
    * @returns The path where the snapshot was written
    */
   private writeLocalSnapshotToDisk(snapshot: LocalSnapshotPayload): string {
+    const stackName = this.extractStackNameFromResourceKey(snapshot.identity.stableResourceKey);
+    
     const filePath = getLocalSnapshotPath({
-      accountId: snapshot.accountId,
-      region: snapshot.region,
-      stackName: snapshot.stackName,
-      datastoreType: snapshot.datastoreType,
-      resourceId: snapshot.resourceId,
+      accountId: snapshot.providerIdentity.accountId,
+      region: snapshot.providerIdentity.region,
+      stackName,
+      datastoreType: snapshot.resource.type,
+      resourceId: snapshot.identity.resourceId,
     });
 
     const dir = getSnapshotDir({
-      accountId: snapshot.accountId,
-      region: snapshot.region,
-      stackName: snapshot.stackName,
-      datastoreType: snapshot.datastoreType,
+      accountId: snapshot.providerIdentity.accountId,
+      region: snapshot.providerIdentity.region,
+      stackName,
+      datastoreType: snapshot.resource.type,
     });
     ensureDirExists(dir);
 

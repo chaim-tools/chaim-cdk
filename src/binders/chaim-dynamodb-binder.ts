@@ -61,6 +61,36 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
   }
 
   /**
+   * Override to resolve the actual table name when possible.
+   * 
+   * Uses stack.resolve() to convert CDK tokens to actual values for explicit table names
+   * (e.g., 'acme-product-catalog') and dynamic names (e.g., `${stack.stackName}-orders`).
+   * Falls back to construct node ID for auto-generated names or cross-stack references.
+   * 
+   * Note: This is called from BaseChaimBinder constructor before this.table is set,
+   * so we access the table from baseProps instead.
+   */
+  protected getResourceName(): string {
+    const props = this.baseProps as ChaimDynamoDBBinderProps;
+    const cfnTable = props.table.node.defaultChild as dynamodb.CfnTable;
+    const stack = cdk.Stack.of(this);
+    
+    // Try to resolve the table name token
+    // This works for explicit names like 'acme-product-catalog'
+    // and dynamic names like `${stack.stackName}-orders`
+    const resolvedName = stack.resolve(cfnTable.tableName);
+    
+    // Check if it's still an unresolved token
+    if (!resolvedName || cdk.Token.isUnresolved(resolvedName)) {
+      // Fallback to construct ID for auto-generated names
+      return props.table.node.id;
+    }
+    
+    // Return the actual resolved table name
+    return resolvedName;
+  }
+
+  /**
    * Extract DynamoDB table metadata.
    */
   protected extractMetadata(): DynamoDBMetadata {
@@ -90,14 +120,21 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
     // Extract billing mode
     const billingMode = this.extractBillingMode(cfnTable);
 
+    // Resolve table name from token (same logic as getResourceName)
+    const resolvedTableName = stack.resolve(cfnTable.tableName);
+    const tableName = (!resolvedTableName || cdk.Token.isUnresolved(resolvedTableName)) 
+      ? table.tableName  // Keep token if can't resolve
+      : resolvedTableName;
+
     return {
       type: 'dynamodb',
-      arn: table.tableArn,
-      name: table.tableName,
-      tableName: table.tableName,
+      // Removed duplicate fields in v1.1:
+      // - arn (use tableArn instead)
+      // - name (use tableName instead)
+      // - account (use top-level accountId instead)
+      tableName,
       tableArn: table.tableArn,
       region: stack.region,
-      account: stack.account,
       partitionKey,
       sortKey,
       globalSecondaryIndexes,

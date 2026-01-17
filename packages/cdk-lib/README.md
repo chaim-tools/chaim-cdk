@@ -1,6 +1,6 @@
 # @chaim-tools/cdk-lib
 
-AWS CDK v2 constructs for binding DynamoDB tables to Chaim schemas.
+AWS CDK L2 constructs for binding DynamoDB tables to Chaim schemas.
 
 ## Installation
 
@@ -190,11 +190,25 @@ The snapshot payload includes:
 
 ## Configuration
 
-### Default API Base URL
+### Environment Configuration
 
-The default API base URL is `https://api.chaim.co`. Override via:
-- CDK context: `chaimApiBaseUrl`
-- Environment variable: `CHAIM_API_BASE_URL`
+The API defaults to production: `https://api.chaim.co`
+
+Override for different environments via CDK context:
+
+```bash
+# Production (default - no context needed)
+cdk deploy
+
+# Development
+cdk deploy --context chaimApiBaseUrl=https://api.dev.chaim.co
+
+# Beta
+cdk deploy --context chaimApiBaseUrl=https://api.beta.chaim.co
+```
+
+You can also set a custom API URL via environment variable in the Lambda:
+- `CHAIM_API_BASE_URL` - Overrides the default at runtime
 
 ## License
 
