@@ -13,7 +13,6 @@ import { BaseBinderProps, validateBinderProps } from '../types/base-binder-props
 import { DataStoreMetadata } from '../types/data-store-metadata';
 import { LocalSnapshotPayload } from '../types/snapshot-payload';
 import { SchemaService } from '../services/schema-service';
-import { FailureMode } from '../types/failure-mode';
 import { TableBindingConfig } from '../types/table-binding-config';
 import {
   SnapshotCachePolicy,
