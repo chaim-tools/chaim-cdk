@@ -22,7 +22,7 @@
   "author": "Chaim Builder",
   "license": "Apache-2.0",
   "dependencies": {
-    "@chaim-tools/cdk-lib": "workspace:*",
+    "@chaim-tools/cdk-lib": "*",
     "aws-cdk-lib": "^2.0.0",
     "constructs": "^10.0.0",
     "source-map-support": "^0.5.21"

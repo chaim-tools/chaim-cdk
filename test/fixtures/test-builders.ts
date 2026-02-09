@@ -90,13 +90,6 @@ export function createTestTable(
     billingMode: options.billingMode || dynamodb.BillingMode.PAY_PER_REQUEST,
   };
 
-  // Add sort key if provided
-  if (options.sortKeyName && options.sortKeyType) {
-    tableProps.sortKey = {
-      name: options.sortKeyName,
-      type: options.sortKeyType,
-    };
-  }
 
   return new dynamodb.Table(scope, tableId, tableProps);
 }

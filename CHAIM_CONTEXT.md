@@ -16,7 +16,7 @@ The chaim-cdk is a **pnpm monorepo** containing AWS CDK L2 constructs for bindin
 > - **LOCAL snapshot**: Written during synthesis (runs for both `cdk synth` and `cdk deploy`). Stored in OS cache. Used by CLI for code generation.
 > - **PUBLISHED snapshot**: Sent to Chaim SaaS at deploy-time by the Lambda custom resource. Contains `eventId` and `contentHash` for audit/tracking.
 > 
-> The CDK construct is never part of the application runtime path.
+> Chaim operates entirely out-of-band: zero impact on your application's request path, no runtime overhead, no sidecars, no instrumentation.
 
 ### Key Capabilities
 

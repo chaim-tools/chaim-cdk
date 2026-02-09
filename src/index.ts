@@ -34,7 +34,6 @@ export {
 export {
   LocalSnapshotPayload,
   PublishedSnapshotPayload,
-  StackContext,
   OperationMetadata,
   DeleteMetadata,
   HashMetadata,
@@ -106,4 +105,4 @@ export {
 } from './services/ingestion-service';
 
 // Re-export schema types from bprint-spec for convenience
-export { SchemaData, Entity, Field, PrimaryKey } from '@chaim-tools/chaim-bprint-spec';
+export { SchemaData, Field, PrimaryKey } from '@chaim-tools/chaim-bprint-spec';

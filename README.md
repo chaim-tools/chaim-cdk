@@ -2,7 +2,7 @@
 
 **Add data governance to your DynamoDB tables in 3 lines of CDK.**
 
-Chaim captures your schema intent at synth or deploy time and publishes it to the Chaim platform. The CDK construct has no runtime overhead and requires no agents.
+Chaim captures your schema intent at synth or deploy time and publishes it to the Chaim platform. The CDK construct operates entirely out-of-band — zero impact on your application's request path, no sidecars, no background processes, no runtime instrumentation.
 
 ## Installation
 
@@ -136,7 +136,7 @@ After CloudFormation triggers the custom resource Lambda:
 5. **Upload** - Snapshot is uploaded to Chaim SaaS via S3 presigned URL
 6. **Register** - Snapshot reference is committed to Chaim binding registry
 
-> **No runtime overhead**: The CDK construct and Lambda run only during CloudFormation operations, never on your application request path.
+> **Zero application impact**: The CDK construct and Lambda run only during CloudFormation operations, never on your application's request path. Chaim operates entirely out-of-band with no runtime overhead, sidecars, or instrumentation.
 
 ## Credentials Setup
 
