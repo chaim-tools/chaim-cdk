@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": ".",
+    "outDir": "lib",
     "rootDir": "."
   },
   "exclude": [
@@ -11,7 +11,7 @@
     "cdk.out"
   ],
   "include": [
-    "lib/**/*",
+    "src/**/*",
     "bin/**/*"
   ]
 }
