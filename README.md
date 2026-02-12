@@ -50,6 +50,23 @@ pnpm test:integration
 
 ⚠️ **Warning**: Deploys actual AWS resources and incurs costs.
 
+### Testing Against Dev / Beta Environments
+
+By default, `cdk deploy` sends ingestion traffic to production (`https://ingest.chaim.co`). During development you can override the base URL via CDK context to test against dev or beta:
+
+```bash
+# Dev
+cdk deploy --context chaimApiBaseUrl=https://ingest.dev.chaim.co
+
+# Beta
+cdk deploy --context chaimApiBaseUrl=https://ingest.beta.chaim.co
+
+# Production (default — no flag needed)
+cdk deploy
+```
+
+The context value is read at synth time and injected into the Lambda as `CHAIM_API_BASE_URL`. Production remains the hardcoded default so customers can never accidentally target a non-production environment.
+
 ## Prerequisites
 
 | Requirement | Version | Notes |

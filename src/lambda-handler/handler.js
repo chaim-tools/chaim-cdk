@@ -191,7 +191,7 @@ exports.handler = async (event, context) => {
         apiBaseUrl,
         apiKey,
         apiSecret,
-        appId: deleteSnapshot.appId,
+        appId: deleteSnapshot.identity?.appId || deleteSnapshot.appId || process.env.APP_ID,
         eventId,
         contentHash: deleteContentHash,
       });
@@ -265,7 +265,7 @@ exports.handler = async (event, context) => {
       apiBaseUrl,
       apiKey,
       apiSecret,
-      appId: snapshotPayload.appId,
+      appId: snapshotPayload.identity?.appId || snapshotPayload.appId || process.env.APP_ID,
       eventId,
       contentHash: enhancedSnapshot.hashes.contentHash,
     });
