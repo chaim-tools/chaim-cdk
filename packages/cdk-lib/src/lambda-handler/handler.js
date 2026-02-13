@@ -106,9 +106,17 @@ exports.handler = async (event, context) => {
   const apiBaseUrl = process.env.CHAIM_API_BASE_URL || DEFAULT_API_BASE_URL;
   const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || String(DEFAULT_MAX_SNAPSHOT_BYTES), 10);
   
-  // Generate eventId at runtime (not synth-time)
+  // Generate eventId at runtime (not synth-time) for audit/tracking
   const eventId = crypto.randomUUID();
   let contentHash = '';
+  
+  // PhysicalResourceId contract with CloudFormation:
+  // - Create: return a new ID (eventId) — CloudFormation stores it
+  // - Update: return the SAME ID from event.PhysicalResourceId — prevents resource replacement
+  // - Delete: return the SAME ID from event.PhysicalResourceId — required by CloudFormation
+  const physicalResourceId = (requestType === 'Create')
+    ? eventId
+    : event.PhysicalResourceId;
   
   try {
     // Read snapshot from bundled asset directory
@@ -207,7 +215,7 @@ exports.handler = async (event, context) => {
       console.log('S3 Key:', presignResponse.s3Key);
       
       console.log('Entity marked as deleted successfully');
-      return buildResponse(eventId, 'SUCCESS', 'DELETE', deletedAt, deleteContentHash);
+      return buildResponse(physicalResourceId, eventId, 'SUCCESS', 'DELETE', deletedAt, deleteContentHash);
     }
     
     // CREATE/UPDATE flow: presigned upload
@@ -280,7 +288,7 @@ exports.handler = async (event, context) => {
     console.log('Snapshot uploaded to S3 successfully');
     console.log('S3 Key:', presignResponse.s3Key);
     
-    return buildResponse(eventId, 'SUCCESS', 'UPSERT', snapshotPayload.capturedAt, contentHash);
+    return buildResponse(physicalResourceId, eventId, 'SUCCESS', 'UPSERT', snapshotPayload.capturedAt, contentHash);
     
   } catch (error) {
     console.error('Ingestion error:', error.message);
@@ -293,16 +301,19 @@ exports.handler = async (event, context) => {
     
     // BEST_EFFORT mode: log error but return success to CloudFormation
     console.log('BEST_EFFORT mode: returning SUCCESS despite error');
-    return buildResponse(eventId, 'FAILED', requestType === 'Delete' ? 'DELETE' : 'UPSERT', new Date().toISOString(), contentHash, error.message);
+    return buildResponse(physicalResourceId, eventId, 'FAILED', requestType === 'Delete' ? 'DELETE' : 'UPSERT', new Date().toISOString(), contentHash, error.message);
   }
 };
 
 /**
  * Build CloudFormation custom resource response.
+ *
+ * @param {string} physicalResourceId - Stable ID for CloudFormation (preserved on Update/Delete)
+ * @param {string} eventId - Unique ID for this ingestion event (audit/tracking)
  */
-function buildResponse(eventId, status, action, timestamp, contentHash, errorMessage) {
+function buildResponse(physicalResourceId, eventId, status, action, timestamp, contentHash, errorMessage) {
   const response = {
-    PhysicalResourceId: eventId,
+    PhysicalResourceId: physicalResourceId,
     Data: {
       EventId: eventId,
       IngestStatus: status,
@@ -464,6 +475,12 @@ async function httpRequest({ method, url, headers, body, apiSecret }) {
         .update(body)
         .digest('hex');
       finalHeaders['x-chaim-signature'] = signature;
+    }
+    
+    // Add Content-Length when body is provided (required for S3 presigned URLs
+    // which do not support Transfer-Encoding: chunked)
+    if (body) {
+      finalHeaders['Content-Length'] = Buffer.byteLength(body);
     }
     
     const options = {

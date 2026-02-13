@@ -67,6 +67,14 @@ export abstract class BaseChaimBinder extends Construct {
   /** Binding configuration */
   public readonly config: TableBindingConfig;
 
+  /**
+   * SHA-256 fingerprint of the full snapshot payload computed at synth time.
+   * Used as a CloudFormation custom resource property to trigger Lambda
+   * re-invocation whenever any snapshot content changes (schema fields,
+   * resource metadata, identity, etc.).
+   */
+  public readonly snapshotFingerprint: string;
+
   /** Base props (for internal use) */
   protected readonly baseProps: BaseBinderProps;
 
@@ -126,6 +134,12 @@ export abstract class BaseChaimBinder extends Construct {
       resourceName,
       identity,
     });
+
+    // Compute snapshot fingerprint for CloudFormation change detection.
+    // This hash covers the entire snapshot (schema + resource metadata + identity),
+    // so any change — schema fields, table config, streams, billing mode, GSIs, etc. —
+    // will trigger CloudFormation to re-invoke the ingestion Lambda.
+    this.snapshotFingerprint = this.computeSnapshotFingerprint(localSnapshot);
 
     // Write LOCAL snapshot to OS cache (OVERWRITE on each synth)
     this.localSnapshotPath = this.writeLocalSnapshotToDisk(localSnapshot);
@@ -329,6 +343,35 @@ export abstract class BaseChaimBinder extends Construct {
    */
   private generateUuid(): string {
     return crypto.randomUUID();
+  }
+
+  /**
+   * Compute a SHA-256 fingerprint of the full snapshot payload.
+   *
+   * This fingerprint is used as a CloudFormation custom resource property
+   * so that any change to the snapshot content triggers a Lambda re-invocation.
+   * It is NOT the canonical contentHash used by Chaim SaaS for deduplication —
+   * that is computed at Lambda runtime over the final enhanced payload.
+   *
+   * Fields excluded from fingerprinting:
+   * - capturedAt: changes every synth (timestamp), would cause unnecessary invocations
+   * - operation.eventId: regenerated every synth (UUID), would cause unnecessary invocations
+   * - hashes.contentHash: always empty at synth time
+   */
+  private computeSnapshotFingerprint(snapshot: LocalSnapshotPayload): string {
+    // Exclude volatile fields that change every synth but don't represent meaningful content changes
+    const { capturedAt, operation, hashes, ...stableFields } = snapshot;
+    const { eventId, ...stableOperation } = operation;
+    const { contentHash, ...stableHashes } = hashes;
+
+    const fingerprintPayload = {
+      ...stableFields,
+      operation: stableOperation,
+      hashes: stableHashes,
+    };
+
+    const bytes = JSON.stringify(fingerprintPayload);
+    return 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
   }
 
   /**
@@ -555,18 +598,23 @@ export abstract class BaseChaimBinder extends Construct {
 
   /**
    * Create CloudFormation custom resource.
+   *
+   * SnapshotFingerprint is included as a property so that CloudFormation
+   * detects changes and triggers an Update invocation of the Lambda whenever
+   * the snapshot content changes (schema, resource metadata, identity, etc.).
+   * Without this, CloudFormation would only invoke the Lambda on initial Create
+   * or Delete — not when the bundled snapshot.json is updated.
    */
   private createCustomResource(handler: lambda.Function): void {
     const provider = new cr.Provider(this, 'IngestionProvider', {
       onEventHandler: handler,
     });
 
-    // Use resource ID for physical resource ID (stable across deploys)
     new cdk.CustomResource(this, 'IngestionResource', {
       serviceToken: provider.serviceToken,
       properties: {
         ResourceId: this.resourceId,
-        // ContentHash is computed at Lambda runtime
+        SnapshotFingerprint: this.snapshotFingerprint,
       },
     });
   }
