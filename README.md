@@ -67,6 +67,64 @@ cdk deploy
 
 The context value is read at synth time and injected into the Lambda as `CHAIM_API_BASE_URL`. Production remains the hardcoded default so customers can never accidentally target a non-production environment.
 
+### Publishing to npm
+
+The `@chaim-tools/cdk-lib` package is published to npm from the `packages/cdk-lib` directory.
+
+#### 1. Log in to npm
+
+```bash
+npm login
+```
+
+Follow the prompts to enter your username, password, and OTP (if 2FA is enabled). To verify you're logged in:
+
+```bash
+npm whoami
+```
+
+#### 2. Build and test
+
+Make sure everything builds and passes tests before publishing:
+
+```bash
+pnpm build
+pnpm test
+```
+
+#### 3. Update the version
+
+From the `packages/cdk-lib` directory, bump the version using [semantic versioning](https://semver.org/):
+
+```bash
+cd packages/cdk-lib
+
+# Patch release (bug fixes, minor changes) — e.g. 0.1.9 → 0.1.10
+npm version patch
+
+# Minor release (new features, backwards-compatible) — e.g. 0.1.9 → 0.2.0
+npm version minor
+
+# Major release (breaking changes) — e.g. 0.1.9 → 1.0.0
+npm version major
+```
+
+#### 4. Publish
+
+```bash
+npm publish --access public
+```
+
+> **Note:** The `--access public` flag is required for scoped packages (`@chaim-tools/*`) on the first publish. Subsequent publishes will remember this setting.
+
+#### 5. Verify
+
+Confirm the new version is live:
+
+```bash
+npm view @chaim-tools/cdk-lib version
+```
+
 ## Prerequisites
 
 | Requirement | Version | Notes |

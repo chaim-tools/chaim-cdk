@@ -28,7 +28,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 // Default configuration (can be overridden via environment variables)
-const DEFAULT_API_BASE_URL = 'https://api.chaim.co';
+const DEFAULT_API_BASE_URL = 'https://ingest.chaim.co';
 const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024; // 10MB
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 

@@ -215,7 +215,7 @@ The snapshot payload includes:
 
 ### Environment Configuration
 
-The API defaults to production: `https://api.chaim.co`
+The API defaults to production: `https://ingest.chaim.co`
 
 Override for different environments via CDK context:
 
@@ -224,10 +224,10 @@ Override for different environments via CDK context:
 cdk deploy
 
 # Development
-cdk deploy --context chaimApiBaseUrl=https://api.dev.chaim.co
+cdk deploy --context chaimApiBaseUrl=https://ingest.dev.chaim.co
 
 # Beta
-cdk deploy --context chaimApiBaseUrl=https://api.beta.chaim.co
+cdk deploy --context chaimApiBaseUrl=https://ingest.beta.chaim.co
 ```
 
 You can also set a custom API URL via environment variable in the Lambda:

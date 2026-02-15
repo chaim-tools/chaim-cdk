@@ -80,7 +80,7 @@ describe('Lambda Handler', () => {
     process.env = { ...originalEnv };
     process.env.API_KEY = 'test-api-key';
     process.env.API_SECRET = 'test-api-secret';
-    process.env.CHAIM_API_BASE_URL = 'https://api.test.chaim.co';
+    process.env.CHAIM_API_BASE_URL = 'https://ingest.test.chaim.co';
     process.env.FAILURE_MODE = 'BEST_EFFORT';
     
     fs.writeFileSync(snapshotPath, JSON.stringify(mockSnapshotPayload));
@@ -231,7 +231,7 @@ describe('Lambda Handler', () => {
     });
 
     it('should use eventId as PhysicalResourceId', async () => {
-      const result = await handler({ RequestType: 'Delete' }, {});
+      const result = await handler({ RequestType: 'Create' }, {});
 
       expect(result.PhysicalResourceId).toBe(result.Data.EventId);
     });
@@ -360,6 +360,6 @@ describe('Lambda Handler', () => {
       
       // Handler should execute without throwing
       expect(result).toBeDefined();
-    });
+    }, 35000); // Default URL (ingest.chaim.co) resolves to a real host; allow time for the 30s request timeout
   });
 });

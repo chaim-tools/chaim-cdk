@@ -10,7 +10,7 @@
  * - CDK context: `chaimApiBaseUrl`
  * - Environment variable: `CHAIM_API_BASE_URL`
  */
-export const DEFAULT_CHAIM_API_BASE_URL = 'https://api.chaim.co';
+export const DEFAULT_CHAIM_API_BASE_URL = 'https://ingest.chaim.co';
 
 /**
  * Chaim ingestion API endpoints (relative paths).

@@ -13,7 +13,7 @@ describe('chaim-endpoints config', () => {
     });
 
     it('should be the canonical Chaim API URL', () => {
-      expect(DEFAULT_CHAIM_API_BASE_URL).toBe('https://api.chaim.co');
+      expect(DEFAULT_CHAIM_API_BASE_URL).toBe('https://ingest.chaim.co');
     });
 
     it('should not have a trailing slash', () => {
@@ -57,7 +57,7 @@ describe('chaim-endpoints config', () => {
     it('should construct valid full URLs', () => {
       const presignUrl = DEFAULT_CHAIM_API_BASE_URL + CHAIM_ENDPOINTS.PRESIGN;
 
-      expect(presignUrl).toBe('https://api.chaim.co/ingest/presign');
+      expect(presignUrl).toBe('https://ingest.chaim.co/ingest/presign');
     });
   });
 });

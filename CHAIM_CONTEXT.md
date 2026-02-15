@@ -248,7 +248,7 @@ Future extensions (not yet implemented):
 The default Chaim API base URL is defined in `src/config/chaim-endpoints.ts`:
 
 ```typescript
-export const DEFAULT_CHAIM_API_BASE_URL = 'https://api.chaim.co';
+export const DEFAULT_CHAIM_API_BASE_URL = 'https://ingest.chaim.co';
 ```
 
 **Override via:**

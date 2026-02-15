@@ -82,7 +82,7 @@ describe('IngestionService', () => {
   describe('buildUrl', () => {
     it('should build presign URL with default base', () => {
       const url = IngestionService.buildUrl('PRESIGN');
-      expect(url).toBe('https://api.chaim.co/ingest/presign');
+      expect(url).toBe('https://ingest.chaim.co/ingest/presign');
     });
 
     it('should use custom base URL when provided', () => {
