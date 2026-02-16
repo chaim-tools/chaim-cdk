@@ -410,9 +410,9 @@ export abstract class BaseChaimBinder extends Construct {
    */
   private computeSnapshotFingerprint(snapshot: LocalSnapshotPayload): string {
     // Exclude volatile fields that change every synth but don't represent meaningful content changes
-    const { capturedAt, operation, hashes, ...stableFields } = snapshot;
-    const { eventId, ...stableOperation } = operation;
-    const { contentHash, ...stableHashes } = hashes;
+    const { capturedAt: _capturedAt, operation, hashes, ...stableFields } = snapshot;
+    const { eventId: _eventId, ...stableOperation } = operation;
+    const { contentHash: _contentHash, ...stableHashes } = hashes;
 
     const fingerprintPayload = {
       ...stableFields,
