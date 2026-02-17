@@ -35,12 +35,12 @@ export class TableBindingConfig {
    * 
    * @param appId - Application ID for the Chaim platform
    * @param credentials - API credentials for Chaim ingestion
-   * @param failureMode - How to handle ingestion failures (default: BEST_EFFORT)
+   * @param failureMode - How to handle ingestion failures (default: STRICT)
    */
   constructor(
     public readonly appId: string,
     public readonly credentials: IChaimCredentials,
-    public readonly failureMode: FailureMode = FailureMode.BEST_EFFORT
+    public readonly failureMode: FailureMode = FailureMode.STRICT
   ) {
     if (!appId || appId.trim() === '') {
       throw new Error('TableBindingConfig: appId cannot be empty');

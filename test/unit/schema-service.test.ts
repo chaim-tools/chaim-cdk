@@ -41,7 +41,7 @@ describe('SchemaService', () => {
 
   describe('readSchema', () => {
     const validSchema: SchemaData = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '1.0',
       entityName: 'User',
       description: 'User entity schema',
       primaryKey: {
@@ -106,7 +106,7 @@ describe('SchemaService', () => {
 
   describe('schema structure validation', () => {
     const baseValidSchema = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '1.0',
       entityName: 'User',
       description: 'User entity schema',
       primaryKey: { partitionKey: 'userId' },

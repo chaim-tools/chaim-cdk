@@ -5,13 +5,14 @@ export enum FailureMode {
   /**
    * Log errors but return SUCCESS to CloudFormation.
    * Deployment continues even if ingestion fails.
-   * This is the default.
+   * Must be explicitly opted into.
    */
   BEST_EFFORT = 'BEST_EFFORT',
 
   /**
    * Return FAILED to CloudFormation on any ingestion error.
-   * WARNING: Deployment will roll back if ingestion fails.
+   * Deployment will roll back if ingestion fails.
+   * This is the default.
    */
   STRICT = 'STRICT',
 }

@@ -13,17 +13,17 @@ describe('TableBindingConfig', () => {
 
       expect(config.appId).toBe('my-app');
       expect(config.credentials).toBeDefined();
-      expect(config.failureMode).toBe(FailureMode.BEST_EFFORT);
+      expect(config.failureMode).toBe(FailureMode.STRICT);
     });
 
     it('should allow custom failureMode', () => {
       const config = new TableBindingConfig(
         'my-app',
         ChaimCredentials.fromApiKeys('key', 'secret'),
-        FailureMode.STRICT
+        FailureMode.BEST_EFFORT
       );
 
-      expect(config.failureMode).toBe(FailureMode.STRICT);
+      expect(config.failureMode).toBe(FailureMode.BEST_EFFORT);
     });
 
     it('should reject empty appId', () => {

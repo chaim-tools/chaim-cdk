@@ -14,13 +14,15 @@ import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
 import { TableBindingConfig } from '../../src/types/table-binding-config';
 
-// Mock schema data for testing
+// Mock schema data for testing — includes pk, sk so field validation passes
 const mockSchemaData = {
-  schemaVersion: '1.0.0',
+  schemaVersion: '1.0',
   entityName: 'User',
   description: 'Test user schema',
-  primaryKey: { partitionKey: 'userId' },
+  primaryKey: { partitionKey: 'pk' },
   fields: [
+    { name: 'pk', type: 'string', required: true },
+    { name: 'sk', type: 'string', required: false },
     { name: 'userId', type: 'string', required: true },
     { name: 'email', type: 'string', required: true },
     { name: 'createdAt', type: 'number' },

@@ -7,16 +7,18 @@ import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
 import { TableBindingConfig } from '../../src/types/table-binding-config';
 
-// Mock schema service
+// Mock schema service — includes pk in fields so field validation passes
 vi.mock('../../src/services/schema-service', () => ({
   SchemaService: {
     readSchema: vi.fn((schemaPath: string) => ({
       schemaVersion: '1.0',
+      entityName: schemaPath.includes('entity1') ? 'Entity1' : 'Entity2',
       namespace: schemaPath.includes('entity1') ? 'test.entity1' : 'test.entity2',
-      entity: { 
-        name: schemaPath.includes('entity1') ? 'Entity1' : 'Entity2',
-        primaryKey: { partitionKey: 'id' } 
-      },
+      primaryKey: { partitionKey: 'pk' },
+      fields: [
+        { name: 'pk', type: 'string', required: true },
+        { name: 'id', type: 'string', required: true },
+      ],
     })),
   },
 }));

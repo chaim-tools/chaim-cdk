@@ -102,7 +102,7 @@ exports.handler = async (event, context) => {
   
   const requestType = event.RequestType; // 'Create', 'Update', or 'Delete'
   const cfRequestId = event.RequestId; // CloudFormation RequestId
-  const failureMode = process.env.FAILURE_MODE || 'BEST_EFFORT';
+  const failureMode = process.env.FAILURE_MODE || 'STRICT';
   const apiBaseUrl = process.env.CHAIM_API_BASE_URL || DEFAULT_API_BASE_URL;
   const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || String(DEFAULT_MAX_SNAPSHOT_BYTES), 10);
   
@@ -245,6 +245,15 @@ exports.handler = async (event, context) => {
       schemaHash = 'sha256:' + crypto.createHash('sha256').update(schemaBytes).digest('hex');
     }
     
+    // Compute schemaContentHash (excluding schemaVersion) for server-side version validation.
+    // This allows the server to detect if schema content changed without a version bump.
+    let schemaContentHash;
+    if (snapshotPayload.schema) {
+      const { schemaVersion: _sv, ...schemaWithoutVersion } = snapshotPayload.schema;
+      const schemaContentBytes = JSON.stringify(schemaWithoutVersion);
+      schemaContentHash = 'sha256:' + crypto.createHash('sha256').update(schemaContentBytes).digest('hex');
+    }
+    
     enhancedSnapshot.hashes = {
       contentHash,
       schemaHash,
@@ -276,6 +285,9 @@ exports.handler = async (event, context) => {
       appId: snapshotPayload.identity?.appId || snapshotPayload.appId || process.env.APP_ID,
       eventId,
       contentHash: enhancedSnapshot.hashes.contentHash,
+      resourceId: snapshotPayload.resourceId,
+      schemaVersion: snapshotPayload.schema?.schemaVersion,
+      schemaContentHash,
     });
     
     const { uploadUrl } = presignResponse;
@@ -387,7 +399,7 @@ async function getCredentials() {
  * 
  * @returns {Object} { uploadUrl, s3Key, expiresAt }
  */
-async function postPresign({ apiBaseUrl, apiKey, apiSecret, appId, eventId, contentHash }) {
+async function postPresign({ apiBaseUrl, apiKey, apiSecret, appId, eventId, contentHash, resourceId, schemaVersion, schemaContentHash }) {
   const url = `${apiBaseUrl}/ingest/presign`;
   
   // Generate nonce (UUID v4) for replay protection
@@ -402,11 +414,14 @@ async function postPresign({ apiBaseUrl, apiKey, apiSecret, appId, eventId, cont
     contentHash,
     timestamp,
     nonce,
+    resourceId,
+    schemaVersion,
+    schemaContentHash,
   };
   
   const body = JSON.stringify(payload);
   
-  console.log('Presign request:', { appId, eventId, contentHash, timestamp, nonce });
+  console.log('Presign request:', { appId, eventId, contentHash, timestamp, nonce, resourceId, schemaVersion, schemaContentHash });
   
   const responseText = await httpRequest({
     method: 'POST',

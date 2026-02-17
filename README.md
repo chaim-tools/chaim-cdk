@@ -1,8 +1,19 @@
 # chaim-cdk
 
-**Add data governance to your DynamoDB tables in 3 lines of CDK.**
+The AWS CDK construct library that connects your DynamoDB tables to the Chaim platform. It reads your `.bprint` schema files at synth time, extracts table metadata (keys, indexes, TTL, streams, billing), writes a local snapshot for CLI code generation, and optionally publishes the snapshot to Chaim SaaS at deploy time for governance and auditing.
 
-Chaim captures your schema intent at synth or deploy time and publishes it to the Chaim platform. The CDK construct operates entirely out-of-band — zero impact on your application's request path, no sidecars, no background processes, no runtime instrumentation.
+**npm**: [`@chaim-tools/cdk-lib`](https://www.npmjs.com/package/@chaim-tools/cdk-lib)
+
+## Where This Fits
+
+```
+ .bprint file  ──>  chaim-cdk  ──>  chaim-cli  ──>  chaim-client-java
+                        ^                                    │
+                        │                                    v
+                  YOUR CDK STACK                     Generated Java SDK
+```
+
+The CDK construct is the bridge between your infrastructure and the code generation pipeline. It captures everything the Java generator needs — schema content, table name, ARN, region, primary key, GSIs, LSIs — and writes it to a local snapshot that the CLI reads.
 
 ## Installation
 
@@ -10,158 +21,32 @@ Chaim captures your schema intent at synth or deploy time and publishes it to th
 npm install @chaim-tools/cdk-lib
 ```
 
-## Development
+**Requirements**: Node.js 20+, AWS CDK v2, `constructs` v10+
 
-### Build
-
-```bash
-pnpm install
-pnpm build             # Build all packages
-cd packages/cdk-lib
-pnpm build             # Build single package
-```
-
-### Test
-
-```bash
-pnpm test              # All tests
-pnpm test:packages     # Unit tests only
-pnpm test:integration  # Integration tests only
-pnpm test:coverage     # With coverage
-```
-
-### Clean
-
-Removes build artifacts:
-
-```bash
-pnpm clean
-```
-
-### Integration Tests
-
-Integration tests deploy real AWS resources and are **skipped by default**. To run:
-
-```bash
-export CHAIM_API_KEY=your-key
-export CHAIM_API_SECRET=your-secret
-pnpm test:integration
-```
-
-⚠️ **Warning**: Deploys actual AWS resources and incurs costs.
-
-### Testing Against Dev / Beta Environments
-
-By default, `cdk deploy` sends ingestion traffic to production (`https://ingest.chaim.co`). During development you can override the base URL via CDK context to test against dev or beta:
-
-```bash
-# Dev
-cdk deploy --context chaimApiBaseUrl=https://ingest.dev.chaim.co
-
-# Beta
-cdk deploy --context chaimApiBaseUrl=https://ingest.beta.chaim.co
-
-# Production (default — no flag needed)
-cdk deploy
-```
-
-The context value is read at synth time and injected into the Lambda as `CHAIM_API_BASE_URL`. Production remains the hardcoded default so customers can never accidentally target a non-production environment.
-
-### Publishing to npm
-
-The `@chaim-tools/cdk-lib` package is published to npm from the `packages/cdk-lib` directory.
-
-#### 1. Log in to npm
-
-```bash
-npm login
-```
-
-Follow the prompts to enter your username, password, and OTP (if 2FA is enabled). To verify you're logged in:
-
-```bash
-npm whoami
-```
-
-#### 2. Build and test
-
-Make sure everything builds and passes tests before publishing:
-
-```bash
-pnpm build
-pnpm test
-```
-
-#### 3. Update the version
-
-From the `packages/cdk-lib` directory, bump the version using [semantic versioning](https://semver.org/):
-
-```bash
-cd packages/cdk-lib
-
-# Patch release (bug fixes, minor changes) — e.g. 0.1.9 → 0.1.10
-npm version patch
-
-# Minor release (new features, backwards-compatible) — e.g. 0.1.9 → 0.2.0
-npm version minor
-
-# Major release (breaking changes) — e.g. 0.1.9 → 1.0.0
-npm version major
-```
-
-#### 4. Publish
-
-```bash
-npm publish --access public
-```
-
-> **Note:** The `--access public` flag is required for scoped packages (`@chaim-tools/*`) on the first publish. Subsequent publishes will remember this setting.
-
-#### 5. Verify
-
-Confirm the new version is live:
-
-```bash
-npm view @chaim-tools/cdk-lib version
-```
-
-## Prerequisites
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Node.js | 20+ | Required for CDK and Lambda runtime |
-| AWS CDK | v2 | CDK v1 is not supported |
-| TypeScript | 5.x | Recommended; JavaScript also supported |
-
-**AWS Requirements:**
-- AWS account with permissions to deploy DynamoDB, Lambda, and IAM resources
-- Secrets Manager access (if using `ChaimCredentials.fromSecretsManager`)
-- Outbound HTTPS from Lambda to Chaim API and S3
-
-**Chaim Requirements:**
-- Chaim account with API credentials (`apiKey` and `apiSecret`) and appId
-
-## Add to an Existing Table
-
-Already have a DynamoDB table? Add Chaim in seconds:
+## Quick Start
 
 ```typescript
-import { ChaimDynamoDBBinder, ChaimCredentials, TableBindingConfig } from '@chaim-tools/cdk-lib';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import {
+  ChaimDynamoDBBinder,
+  TableBindingConfig,
+  ChaimCredentials,
+} from '@chaim-tools/cdk-lib';
 
-// Your existing CDK stack
+// Your existing DynamoDB table
 const usersTable = new dynamodb.Table(this, 'UsersTable', {
   partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
 });
 
-// Create binding configuration
+// Create a binding config (shared across all entities on this table)
 const config = new TableBindingConfig(
   'my-app',
   ChaimCredentials.fromSecretsManager('chaim/credentials')
 );
 
-// Add Chaim - that's it
+// Bind your schema to the table — 3 lines of CDK
 new ChaimDynamoDBBinder(this, 'UsersSchema', {
-  schemaPath: './schemas/users.bprint',
+  schemaPath: './schemas/user.bprint',
   table: usersTable,
   config,
 });
@@ -171,51 +56,100 @@ Your table deploys exactly as before. Chaim captures the schema and table metada
 
 ## Two Workflows
 
-Chaim supports two workflows depending on your needs:
+### Local-Only (Development)
 
-### LOCAL-only Workflow (Development)
-
-Generate code without deploying - perfect for rapid iteration:
+Generate code without deploying to AWS — ideal for rapid iteration:
 
 ```bash
-cdk synth                           # Writes LOCAL snapshot to OS cache
-chaim generate --package com.example  # Generates SDK from LOCAL snapshot
+cdk synth                             # Writes LOCAL snapshot to OS cache
+chaim generate --package com.example  # Generates Java SDK from snapshot
 ```
 
-### Full Workflow (Production)
+### Full (Production)
 
-Deploy and publish schema to Chaim SaaS:
+Deploy and publish the schema to Chaim SaaS for governance:
 
 ```bash
-cdk deploy                          # Writes LOCAL + publishes to Chaim SaaS
-chaim generate --package com.example  # Generates SDK from LOCAL snapshot
+cdk deploy                            # Writes LOCAL snapshot + publishes to Chaim SaaS
+chaim generate --package com.example  # Generates Java SDK from snapshot
 ```
 
-> **Terminology** 
-> * **LOCAL** = snapshot written to OS cache at synth time (for CLI). 
-> * **PUBLISHED** = snapshot sent to Chaim SaaS at deploy time (for governance/audit).
+**LOCAL** = snapshot written to OS cache at synth time for CLI consumption.
+**PUBLISHED** = snapshot sent to Chaim SaaS at deploy time for governance and audit.
 
-## What Happens When
+## What Happens at Each Stage
 
 ### During `cdk synth` (and `cdk deploy`)
 
-1. **Validate** - Your `.bprint` schema is validated
-2. **Capture** - Table metadata is extracted (keys, indexes, TTL, streams)
-3. **Write LOCAL snapshot** - Saved to OS cache (`~/.chaim/cache/snapshots/`) for CLI code generation
-4. **Write Lambda asset** - Bundled to `cdk.out/chaim/assets/` for deploy-time ingestion
+1. Validates the `.bprint` schema against the spec
+2. Extracts database metadata (e.g., keys, indexes, TTL, streams, billing mode)
+3. Writes a LOCAL snapshot to `~/.chaim/cache/snapshots/` for the CLI
+4. Bundles a Lambda asset to `cdk.out/chaim/assets/` for deploy-time ingestion
 
 ### During `cdk deploy` (Lambda execution)
 
-After CloudFormation triggers the custom resource Lambda:
+5. Requests a presigned upload URL from the Chaim API (`POST /ingest/presign`), including `schemaVersion` and a `schemaContentHash` (a hash of the schema content excluding the version field). The server validates that the `schemaVersion` was incremented if schema content changed since the last deploy — if not, it rejects the request with HTTP 409.
+6. Uploads the snapshot to Chaim SaaS via the S3 presigned URL
 
-5. **Upload** - Snapshot is uploaded to Chaim SaaS via S3 presigned URL
-6. **Register** - Snapshot reference is committed to Chaim binding registry
+If you see a `409 Conflict` error during deploy, bump the schema version with `chaim bump <file>` and redeploy.
 
-> **Zero application impact**: The CDK construct and Lambda run only during CloudFormation operations, never on your application's request path. Chaim operates entirely out-of-band with no runtime overhead, sidecars, or instrumentation.
+The CDK construct and Lambda run only during CloudFormation operations. There is zero runtime impact on your application — no sidecars, no background processes, no instrumentation.
+
+## Single-Table Design
+
+For single-table design for NoSQL tables with multiple entities, create one `TableBindingConfig` and share it:
+
+```typescript
+const singleTable = new dynamodb.Table(this, 'DataTable', {
+  partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+  sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+});
+
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/credentials')
+);
+
+new ChaimDynamoDBBinder(this, 'UserBinding', {
+  schemaPath: './schemas/user.bprint',
+  table: singleTable,
+  config,
+});
+
+new ChaimDynamoDBBinder(this, 'OrderBinding', {
+  schemaPath: './schemas/order.bprint',
+  table: singleTable,
+  config,
+});
+```
+
+All entities bound to the same table share the same `appId` and credentials. `TableBindingConfig` enforces this by design.
+
+##  Metadata Captured
+
+The construct extracts the following from your CDK table definition:
+
+### DynamoDB
+
+| Property | Captured |
+|----------|----------|
+| Table name | Yes |
+| Table ARN | Yes |
+| Region | Yes |
+| Partition key | Yes |
+| Sort key | Yes |
+| Global Secondary Indexes (name, keys, projection) | Yes |
+| Local Secondary Indexes (name, sort key, projection) | Yes |
+| TTL attribute | Yes |
+| Stream configuration (enabled, view type) | Yes |
+| Billing mode | Yes |
+| Encryption key ARN (customer-managed KMS) | Yes |
+
+This metadata flows through the CLI to the Java generator, which uses it to generate GSI/LSI query methods and index constants.
 
 ## Credentials Setup
 
-Store your Chaim API credentials in AWS Secrets Manager:
+### Secrets Manager (Recommended for Production)
 
 ```bash
 aws secretsmanager create-secret \
@@ -223,13 +157,16 @@ aws secretsmanager create-secret \
   --secret-string '{"apiKey":"your-api-key","apiSecret":"your-api-secret"}'
 ```
 
-Then reference it in your CDK:
-
 ```typescript
-credentials: ChaimCredentials.fromSecretsManager('chaim/credentials')
+const config = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromSecretsManager('chaim/credentials')
+);
 ```
 
-For local development, you can use direct credentials:
+The Secret ARN is captured as a reference only. The deploy-time Lambda reads Secrets Manager at runtime. No credentials appear in synthesized templates or logs.
+
+### Direct API Keys (Development Only)
 
 ```typescript
 const config = new TableBindingConfig(
@@ -241,71 +178,53 @@ const config = new TableBindingConfig(
 );
 ```
 
-### Credential Security Model
-
-> **Important:** Synth never reads secret values. The Secret ARN/name is captured as a reference only. The deploy-time Lambda reads Secrets Manager and signs outbound API requests. No credentials are logged or included in synthesized templates.
-
 ## Failure Handling
-
-By default, Chaim uses `BEST_EFFORT` mode - your deployment succeeds even if ingestion fails.
-
-For critical environments, use `STRICT` mode to roll back on failure:
-
-```typescript
-import { FailureMode, TableBindingConfig } from '@chaim-tools/cdk-lib';
-
-// Create config with STRICT mode
-const config = new TableBindingConfig(
-  'my-app',
-  ChaimCredentials.fromSecretsManager('chaim/credentials'),
-  FailureMode.STRICT  // Optional third parameter
-);
-
-new ChaimDynamoDBBinder(this, 'UsersSchema', {
-  schemaPath: './schemas/users.bprint',
-  table: usersTable,
-  config,
-});
-```
 
 | Mode | Behavior |
 |------|----------|
-| `BEST_EFFORT` (default) | Deployment continues if ingestion fails |
-| `STRICT` | Deployment rolls back if ingestion fails |
-
-## Single-Table Design
-
-For single-table design with multiple entities, create **one** `TableBindingConfig` and share it across all bindings:
+| `STRICT` (default) | Deployment rolls back if ingestion fails |
+| `BEST_EFFORT` | Deployment succeeds even if Chaim ingestion fails (must be explicitly set) |
 
 ```typescript
-import { TableBindingConfig } from '@chaim-tools/cdk-lib';
+import { FailureMode } from '@chaim-tools/cdk-lib';
 
-const singleTable = new dynamodb.Table(this, 'SingleTable', {
-  partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
-  sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
-});
-
-// Create config ONCE
-const tableConfig = new TableBindingConfig(
+// Default is STRICT - no need to specify
+const config = new TableBindingConfig(
   'my-app',
   ChaimCredentials.fromSecretsManager('chaim/credentials')
 );
 
-// Share across all entities
-new ChaimDynamoDBBinder(this, 'UserBinding', {
-  schemaPath: './schemas/user.bprint',
-  table: singleTable,
-  config: tableConfig,  // Same config
-});
-
-new ChaimDynamoDBBinder(this, 'OrderBinding', {
-  schemaPath: './schemas/order.bprint',
-  table: singleTable,
-  config: tableConfig,  // Same config
-});
+// Opt into BEST_EFFORT explicitly for development/testing
+const devConfig = new TableBindingConfig(
+  'my-app',
+  ChaimCredentials.fromApiKeys('key', 'secret'),
+  FailureMode.BEST_EFFORT
+);
 ```
 
-**Why?** All entities in the same table must share the same `appId` and `credentials`. `TableBindingConfig` enforces this by design.
+## Snapshot Output Locations
+
+### LOCAL Snapshots (for CLI Code Generation)
+
+| OS | Path |
+|----|------|
+| macOS / Linux | `~/.chaim/cache/snapshots/` |
+| Windows | `%LOCALAPPDATA%/chaim/cache/snapshots/` |
+
+Override with `CHAIM_SNAPSHOT_DIR` environment variable.
+
+Directory structure:
+```
+~/.chaim/cache/snapshots/aws/{accountId}/{region}/{stackName}/dynamodb/{resourceId}.json
+```
+
+### Lambda Assets (for Deploy-Time Ingestion)
+
+```
+cdk.out/chaim/assets/{stackName}/{resourceId}/
+├── snapshot.json
+└── index.js
+```
 
 ## Props Reference
 
@@ -314,116 +233,99 @@ new ChaimDynamoDBBinder(this, 'OrderBinding', {
 | Property | Required | Description |
 |----------|----------|-------------|
 | `schemaPath` | Yes | Path to your `.bprint` schema file |
-| `table` | Yes | Your DynamoDB table |
-| `config` | Yes | `TableBindingConfig` with appId, credentials, and failureMode |
+| `table` | Yes | Your `dynamodb.Table` construct |
+| `config` | Yes | `TableBindingConfig` with appId, credentials, and failure mode |
 
 ### TableBindingConfig
 
-Constructor: `new TableBindingConfig(appId, credentials, failureMode?)`
+```typescript
+new TableBindingConfig(appId, credentials, failureMode?)
+```
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `appId` | Yes | Your Chaim application ID |
-| `credentials` | Yes | API credentials (from `ChaimCredentials`) |
-| `failureMode` | No | `BEST_EFFORT` (default) or `STRICT` |
+| `appId` | Yes | Your Chaim application identifier |
+| `credentials` | Yes | `ChaimCredentials.fromSecretsManager()` or `.fromApiKeys()` |
+| `failureMode` | No | `FailureMode.STRICT` (default) or `FailureMode.BEST_EFFORT` |
 
-## Data Sent to Chaim
+## Data Sent to Chaim SaaS
 
-The following metadata is transmitted to Chaim SaaS at deploy time:
+**Sent**: `.bprint` schema content, entity/field definitions, DynamoDB table metadata (name, ARN, keys, indexes, TTL, streams, billing), `appId`, `stackName`, `accountId`, `region`.
 
-**Schema & Identity:**
-- `.bprint` schema content (entity definitions, field types, constraints)
-- `appId`, `resourceId`, `stackName`
-- `accountId`, `region`
+**Never sent**: table data or records, sampled data, IAM credentials or secret values, application code.
 
-**DynamoDB Metadata:**
-- Table name and ARN
-- Partition key and sort key names
-- GSI/LSI configurations (names, keys, projections)
-- TTL attribute name (if enabled)
-- Stream configuration (if enabled)
-- Billing mode
-- Encryption key ARN (if customer-managed)
+All data transmits over HTTPS. Snapshots upload to Chaim S3 via presigned URLs and are encrypted at rest.
 
-**What is NOT sent:**
-- ❌ No table data or records
-- ❌ No sampled data
-- ❌ No IAM credentials or secret values
-- ❌ No application code
-
-> All data is transmitted over HTTPS. Snapshots are uploaded to Chaim's S3 via presigned URLs and encrypted at rest.
-
-## Snapshot Outputs
-
-Chaim writes snapshots to **two locations** for different consumers:
-
-### LOCAL Snapshots (for CLI)
-
-Written to the OS cache at synth time for `chaim-cli` code generation:
-
-| OS | Default Path |
-|----|--------------|
-| macOS/Linux | `~/.chaim/cache/snapshots/` |
-| Windows | `%LOCALAPPDATA%/chaim/cache/snapshots/` |
-
-**Override:** Set `CHAIM_SNAPSHOT_DIR` environment variable.
-
-**Directory structure:**
-```
-~/.chaim/cache/snapshots/aws/{accountId}/{region}/{stackName}/{dataStoreType}/{resourceId}.json
-```
-
-### Lambda Assets (for Deploy)
-
-Bundled into `cdk.out/chaim/assets/` for the deploy-time Lambda:
-
-```
-cdk.out/chaim/assets/{stackName}/{resourceId}/
-├── snapshot.json    # Snapshot payload
-└── index.js         # Lambda handler
-```
-
-This directory is bundled as a CDK asset and read by the Lambda at deploy time.
-
-### Why Two Locations?
-
-| Output | Consumer | When Written | Purpose |
-|--------|----------|--------------|---------|
-| **LOCAL** (OS cache) | `chaim-cli` | `cdk synth` | Code generation from any directory |
-| **Lambda asset** | Deploy Lambda | `cdk synth` | Ingestion to Chaim SaaS |
-
-The hierarchical structure ensures:
-- Zero collisions across multi-account/multi-region deployments
-- Support for multiple entities per table (single-table design)
-- CLI works without access to CDK project directory
-
-## Examples
-
-The `packages/examples/` directory contains working CDK applications demonstrating Chaim integration patterns:
-
-- **consumer-cdk-app** - A complete example showing both direct API credentials and Secrets Manager patterns, with `BEST_EFFORT` and `STRICT` failure modes.
-
-Each example includes its own README with setup and deployment instructions.
+## Testing Against Non-Production Environments
 
 ```bash
-cd packages/examples/consumer-cdk-app
-cat README.md
+cdk deploy --context chaimApiBaseUrl=https://ingest.dev.chaim.co   # Dev
+cdk deploy --context chaimApiBaseUrl=https://ingest.beta.chaim.co  # Beta
+cdk deploy                                                          # Production (default)
 ```
 
-## Related Packages
+## Development
 
-| Package | Purpose |
-|---------|---------|
-| [chaim-bprint-spec](https://github.com/chaim-tools/chaim-bprint-spec) | Schema format specification (`.bprint` files) |
-| [chaim-cli](https://github.com/chaim-tools/chaim-cli) | Code generation from snapshots |
-| [chaim-examples-java](https://github.com/chaim-tools/chaim-examples-java) | Java application examples with generated SDKs |
+```bash
+npm install
+npm run build          # Build all packages
+npm run test           # Run all tests
+npm run test:packages  # Unit tests only
+npm run clean          # Remove build artifacts
+```
 
-## Coming Soon
+### Publishing
 
-- Aurora PostgreSQL/MySQL
-- RDS instances  
-- S3 buckets
-- DocumentDB
+```bash
+cd packages/cdk-lib
+npm version patch      # or minor / major
+npm publish --access public
+```
+
+## Using in Your CDK Application
+
+Add `@chaim-tools/cdk-lib` as a dependency in your CDK project:
+
+```bash
+cd my-cdk-project
+npm install @chaim-tools/cdk-lib
+```
+
+Place `.bprint` schema files in a `schemas/` directory (or anywhere accessible at synth time). Reference them in your stack:
+
+```typescript
+import { ChaimDynamoDBBinder, TableBindingConfig, ChaimCredentials } from '@chaim-tools/cdk-lib';
+
+export class MyStack extends cdk.Stack {
+  constructor(scope: Construct, id: string) {
+    super(scope, id);
+
+    const table = new dynamodb.Table(this, 'OrdersTable', {
+      partitionKey: { name: 'orderId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'customerId', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Add a GSI — Chaim captures it automatically
+    table.addGlobalSecondaryIndex({
+      indexName: 'customer-index',
+      partitionKey: { name: 'customerId', type: dynamodb.AttributeType.STRING },
+    });
+
+    const config = new TableBindingConfig(
+      'my-app',
+      ChaimCredentials.fromSecretsManager('chaim/credentials')
+    );
+
+    new ChaimDynamoDBBinder(this, 'OrderSchema', {
+      schemaPath: './schemas/order.bprint',
+      table,
+      config,
+    });
+  }
+}
+```
+
+After `cdk synth`, run `chaim generate --package com.mycompany.model` to produce the Java SDK with query methods for the `customer-index` GSI.
 
 ## License
 

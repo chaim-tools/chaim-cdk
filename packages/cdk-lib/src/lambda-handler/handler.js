@@ -102,7 +102,7 @@ exports.handler = async (event, context) => {
   
   const requestType = event.RequestType; // 'Create', 'Update', or 'Delete'
   const cfRequestId = event.RequestId; // CloudFormation RequestId
-  const failureMode = process.env.FAILURE_MODE || 'BEST_EFFORT';
+  const failureMode = process.env.FAILURE_MODE || 'STRICT';
   const apiBaseUrl = process.env.CHAIM_API_BASE_URL || DEFAULT_API_BASE_URL;
   const maxSnapshotBytes = parseInt(process.env.CHAIM_MAX_SNAPSHOT_BYTES || String(DEFAULT_MAX_SNAPSHOT_BYTES), 10);
   

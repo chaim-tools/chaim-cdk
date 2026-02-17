@@ -7,14 +7,17 @@ import { ChaimDynamoDBBinder } from '../../src/binders/chaim-dynamodb-binder';
 import { ChaimCredentials } from '../../src/types/credentials';
 import { TableBindingConfig } from '../../src/types/table-binding-config';
 import { FailureMode } from '../../src/types/failure-mode';
+import { SchemaService } from '../../src/services/schema-service';
 
-// Mock schema data
+// Mock schema data — includes pk, sk, email so existing table/index tests pass field validation
 const mockSchemaData = {
-  schemaVersion: 'v1',
+  schemaVersion: '1.0',
   entityName: 'User',
   description: 'Test user schema',
-  primaryKey: { partitionKey: 'userId' },
+  primaryKey: { partitionKey: 'pk' },
   fields: [
+    { name: 'pk', type: 'string', required: true },
+    { name: 'sk', type: 'string', required: false },
     { name: 'userId', type: 'string', required: true },
     { name: 'email', type: 'string', required: true },
   ],
@@ -195,7 +198,7 @@ describe('ChaimDynamoDBBinder', () => {
       ensureAssetDir('TestStack', 'TestBinder__User');
     });
 
-    it('should use BEST_EFFORT by default', () => {
+    it('should use STRICT by default', () => {
       const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
@@ -220,6 +223,23 @@ describe('ChaimDynamoDBBinder', () => {
 
       expect(binder).toBeDefined();
       expect(binder.config.failureMode).toBe(FailureMode.STRICT);
+    });
+
+    it('should accept BEST_EFFORT failure mode when explicitly set', () => {
+      const bestEffortConfig = new TableBindingConfig(
+        'test-app',
+        ChaimCredentials.fromApiKeys('test-key', 'test-secret'),
+        FailureMode.BEST_EFFORT
+      );
+      
+      const binder = new ChaimDynamoDBBinder(stack, 'TestBinder', {
+        schemaPath: './schemas/test.bprint',
+        table,
+        config: bestEffortConfig,
+      });
+
+      expect(binder).toBeDefined();
+      expect(binder.config.failureMode).toBe(FailureMode.BEST_EFFORT);
     });
   });
 
@@ -260,6 +280,255 @@ describe('ChaimDynamoDBBinder', () => {
 
       // resourceId should contain entity name from schema
       expect(binder.resourceId).toContain('__User');
+    });
+  });
+
+  describe('field reference validation', () => {
+    it('should pass when all key fields exist in schema', () => {
+      ensureAssetDir('TestStack', 'ValidBinder__User');
+
+      const tableWithSK = new dynamodb.Table(stack, 'ValidTable', {
+        tableName: 'valid-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+        sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      });
+
+      tableWithSK.addGlobalSecondaryIndex({
+        indexName: 'email-index',
+        partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+      });
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'ValidBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: tableWithSK,
+          config: testConfig,
+        });
+      }).not.toThrow();
+    });
+
+    it('should throw when table partition key is not in schema', () => {
+      ensureAssetDir('TestStack', 'BadPKBinder__MissingPK');
+
+      const schemaWithoutPK = {
+        ...mockSchemaData,
+        entityName: 'MissingPK',
+        fields: [
+          { name: 'userId', type: 'string', required: true },
+          { name: 'email', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(schemaWithoutPK);
+
+      const badPKTable = new dynamodb.Table(stack, 'BadPKTable', {
+        tableName: 'bad-pk-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      });
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'BadPKBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: badPKTable,
+          config: testConfig,
+        });
+      }).toThrow(/Table partition key 'pk' is not defined in schema fields/);
+    });
+
+    it('should throw when table sort key is not in schema', () => {
+      ensureAssetDir('TestStack', 'BadSKBinder__MissingSK');
+
+      const schemaWithoutSK = {
+        ...mockSchemaData,
+        entityName: 'MissingSK',
+        fields: [
+          { name: 'pk', type: 'string', required: true },
+          { name: 'email', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(schemaWithoutSK);
+
+      const badSKTable = new dynamodb.Table(stack, 'BadSKTable', {
+        tableName: 'bad-sk-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+        sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      });
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'BadSKBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: badSKTable,
+          config: testConfig,
+        });
+      }).toThrow(/Table sort key 'sk' is not defined in schema fields/);
+    });
+
+    it('should throw when GSI partition key is not in schema', () => {
+      ensureAssetDir('TestStack', 'BadGSIPKBinder__BadGSIPK');
+
+      const schemaNoGSIField = {
+        ...mockSchemaData,
+        entityName: 'BadGSIPK',
+        fields: [
+          { name: 'pk', type: 'string', required: true },
+          { name: 'email', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(schemaNoGSIField);
+
+      const gsiTable = new dynamodb.Table(stack, 'GSIPKTable', {
+        tableName: 'gsi-pk-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      });
+
+      // Directly set CfnTable GSI property (CDK uses lazy evaluation for addGlobalSecondaryIndex)
+      const cfnGSITable = gsiTable.node.defaultChild as dynamodb.CfnTable;
+      cfnGSITable.globalSecondaryIndexes = [{
+        indexName: 'status-index',
+        keySchema: [{ attributeName: 'status', keyType: 'HASH' }],
+        projection: { projectionType: 'ALL' },
+      }];
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'BadGSIPKBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: gsiTable,
+          config: testConfig,
+        });
+      }).toThrow(/GSI 'status-index' partition key 'status' is not defined in schema fields/);
+    });
+
+    it('should throw when GSI sort key is not in schema', () => {
+      ensureAssetDir('TestStack', 'BadGSISKBinder__BadGSISK');
+
+      const schemaNoGSISK = {
+        ...mockSchemaData,
+        entityName: 'BadGSISK',
+        fields: [
+          { name: 'pk', type: 'string', required: true },
+          { name: 'email', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(schemaNoGSISK);
+
+      const gsiSKTable = new dynamodb.Table(stack, 'GSISKTable', {
+        tableName: 'gsi-sk-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      });
+
+      const cfnGSISKTable = gsiSKTable.node.defaultChild as dynamodb.CfnTable;
+      cfnGSISKTable.globalSecondaryIndexes = [{
+        indexName: 'email-created-index',
+        keySchema: [
+          { attributeName: 'email', keyType: 'HASH' },
+          { attributeName: 'createdAt', keyType: 'RANGE' },
+        ],
+        projection: { projectionType: 'ALL' },
+      }];
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'BadGSISKBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: gsiSKTable,
+          config: testConfig,
+        });
+      }).toThrow(/GSI 'email-created-index' sort key 'createdAt' is not defined in schema fields/);
+    });
+
+    it('should throw when LSI sort key is not in schema', () => {
+      ensureAssetDir('TestStack', 'BadLSIBinder__BadLSI');
+
+      const schemaNoLSIField = {
+        ...mockSchemaData,
+        entityName: 'BadLSI',
+        fields: [
+          { name: 'pk', type: 'string', required: true },
+          { name: 'sk', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(schemaNoLSIField);
+
+      const lsiTable = new dynamodb.Table(stack, 'LSITable', {
+        tableName: 'lsi-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+        sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      });
+
+      const cfnLSITable = lsiTable.node.defaultChild as dynamodb.CfnTable;
+      cfnLSITable.localSecondaryIndexes = [{
+        indexName: 'status-lsi',
+        keySchema: [
+          { attributeName: 'pk', keyType: 'HASH' },
+          { attributeName: 'localStatus', keyType: 'RANGE' },
+        ],
+        projection: { projectionType: 'ALL' },
+      }];
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'BadLSIBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: lsiTable,
+          config: testConfig,
+        });
+      }).toThrow(/LSI 'status-lsi' sort key 'localStatus' is not defined in schema fields/);
+    });
+
+    it('should collect multiple errors and report them all', () => {
+      ensureAssetDir('TestStack', 'MultiBadBinder__MultiError');
+
+      const minimalSchema = {
+        ...mockSchemaData,
+        entityName: 'MultiError',
+        fields: [
+          { name: 'onlyField', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(minimalSchema);
+
+      const multiTable = new dynamodb.Table(stack, 'MultiTable', {
+        tableName: 'multi-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      });
+
+      const cfnMultiTable = multiTable.node.defaultChild as dynamodb.CfnTable;
+      cfnMultiTable.globalSecondaryIndexes = [{
+        indexName: 'missing-gsi',
+        keySchema: [{ attributeName: 'gsiField', keyType: 'HASH' }],
+        projection: { projectionType: 'ALL' },
+      }];
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'MultiBadBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: multiTable,
+          config: testConfig,
+        });
+      }).toThrow(/Table partition key 'pk' is not defined.*GSI 'missing-gsi' partition key 'gsiField' is not defined/s);
+    });
+
+    it('should include entity name in the error message', () => {
+      ensureAssetDir('TestStack', 'EntityErrBinder__EntityErr');
+
+      const entitySchema = {
+        ...mockSchemaData,
+        entityName: 'EntityErr',
+        fields: [
+          { name: 'onlyField', type: 'string', required: true },
+        ],
+      };
+      vi.mocked(SchemaService.readSchema).mockReturnValueOnce(entitySchema);
+
+      const errTable = new dynamodb.Table(stack, 'EntityErrTable', {
+        tableName: 'entity-err-table',
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      });
+
+      expect(() => {
+        new ChaimDynamoDBBinder(stack, 'EntityErrBinder', {
+          schemaPath: './schemas/test.bprint',
+          table: errTable,
+          config: testConfig,
+        });
+      }).toThrow(/Schema field reference validation failed for entity 'EntityErr'/);
     });
   });
 });

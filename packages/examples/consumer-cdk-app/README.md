@@ -63,13 +63,13 @@ pnpm deploy
 
 | Table | Credentials | Failure Mode | Use Case |
 |-------|-------------|--------------|----------|
-| Users | Direct API keys | BEST_EFFORT | Development/Testing |
-| Orders | Secrets Manager | STRICT | Production |
+| Users | Direct API keys | BEST_EFFORT (explicit) | Development/Testing |
+| Orders | Secrets Manager | STRICT (default) | Production |
 
 ### Failure Modes
 
-- **BEST_EFFORT** (default) - Deployment continues even if Chaim ingestion fails
-- **STRICT** - Deployment rolls back if Chaim ingestion fails
+- **STRICT** (default) - Deployment rolls back if Chaim ingestion fails
+- **BEST_EFFORT** - Deployment continues even if Chaim ingestion fails (must be explicitly set)
 
 ## Project Structure
 

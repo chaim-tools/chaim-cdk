@@ -32,7 +32,7 @@ export interface ChaimDynamoDBBinderProps extends BaseBinderProps {
  *   partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
  * });
  *
- * // failureMode defaults to BEST_EFFORT
+ * // failureMode defaults to STRICT
  * new ChaimDynamoDBBinder(this, 'UserSchema', {
  *   schemaPath: './schemas/user.bprint',
  *   table,
@@ -119,6 +119,9 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
 
     // Extract billing mode
     const billingMode = this.extractBillingMode(cfnTable);
+
+    // Validate all key/index attributes exist in schema
+    this.validateFieldReferences(partitionKey, sortKey, globalSecondaryIndexes, localSecondaryIndexes, ttlAttribute);
 
     // Resolve table name from token (same logic as getResourceName)
     const resolvedTableName = stack.resolve(cfnTable.tableName);
@@ -318,6 +321,62 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
       return billingMode;
     }
     return undefined;
+  }
+
+  /**
+   * Validate that all DynamoDB key attribute names (table PK/SK, GSI keys,
+   * LSI keys, TTL attribute) exist as fields in the .bprint schema.
+   *
+   * Collects all mismatches and throws a single error with all violations,
+   * making it easy to fix everything in one pass.
+   */
+  private validateFieldReferences(
+    partitionKey: string,
+    sortKey: string | undefined,
+    globalSecondaryIndexes: GSIMetadata[] | undefined,
+    localSecondaryIndexes: LSIMetadata[] | undefined,
+    ttlAttribute: string | undefined,
+  ): void {
+    const fieldNames = new Set(this.schemaData.fields.map(f => f.name));
+    const errors: string[] = [];
+
+    if (!fieldNames.has(partitionKey)) {
+      errors.push(`Table partition key '${partitionKey}' is not defined in schema fields`);
+    }
+    if (sortKey && !fieldNames.has(sortKey)) {
+      errors.push(`Table sort key '${sortKey}' is not defined in schema fields`);
+    }
+
+    if (globalSecondaryIndexes) {
+      for (const gsi of globalSecondaryIndexes) {
+        if (!fieldNames.has(gsi.partitionKey)) {
+          errors.push(`GSI '${gsi.indexName}' partition key '${gsi.partitionKey}' is not defined in schema fields`);
+        }
+        if (gsi.sortKey && !fieldNames.has(gsi.sortKey)) {
+          errors.push(`GSI '${gsi.indexName}' sort key '${gsi.sortKey}' is not defined in schema fields`);
+        }
+      }
+    }
+
+    if (localSecondaryIndexes) {
+      for (const lsi of localSecondaryIndexes) {
+        if (lsi.sortKey && !fieldNames.has(lsi.sortKey)) {
+          errors.push(`LSI '${lsi.indexName}' sort key '${lsi.sortKey}' is not defined in schema fields`);
+        }
+      }
+    }
+
+    if (ttlAttribute && !fieldNames.has(ttlAttribute)) {
+      errors.push(`TTL attribute '${ttlAttribute}' is not defined in schema fields`);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(
+        `Schema field reference validation failed for entity '${this.schemaData.entityName}':\n` +
+        errors.map(e => `  - ${e}`).join('\n') + '\n\n' +
+        `All DynamoDB key attributes must exist as fields in the .bprint schema.`
+      );
+    }
   }
 }
 

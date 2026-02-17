@@ -88,14 +88,14 @@ const config = new TableBindingConfig(
 const config = new TableBindingConfig(
   'my-app',
   ChaimCredentials.fromApiKeys(apiKey, apiSecret),
-  FailureMode.STRICT  // Optional - defaults to BEST_EFFORT
+  FailureMode.BEST_EFFORT  // Optional - defaults to STRICT
 );
 ```
 
 **Constructor Parameters:**
 - `appId` (string) - Application ID for the Chaim platform
 - `credentials` (IChaimCredentials) - API credentials
-- `failureMode` (FailureMode) - Optional, defaults to BEST_EFFORT
+- `failureMode` (FailureMode) - Optional, defaults to STRICT
 
 ### `ChaimCredentials`
 
@@ -113,8 +113,8 @@ const credentials = ChaimCredentials.fromApiKeys(apiKey, apiSecret);
 
 | Mode | Behavior |
 |------|----------|
-| `BEST_EFFORT` (default) | Log errors, return SUCCESS to CloudFormation |
-| `STRICT` | Return FAILED to CloudFormation on any ingestion error |
+| `STRICT` (default) | Return FAILED to CloudFormation on any ingestion error |
+| `BEST_EFFORT` | Log errors, return SUCCESS to CloudFormation (must be explicitly set) |
 
 ## Single-Table Design (Multiple Entities)
 

@@ -14,7 +14,7 @@
 export type SnapshotAction = 'UPSERT' | 'DELETE';
 
 /**
- * Request payload for POST /ingest/upload-url
+ * Request payload for POST /ingest/presign
  */
 export interface UploadUrlRequest {
   /** Application ID */
@@ -25,6 +25,16 @@ export interface UploadUrlRequest {
   
   /** SHA-256 hash of snapshot bytes (format: "sha256:<hex>") */
   readonly contentHash: string;
+  
+  /** Resource ID for the entity binding (used for schemaVersion validation) */
+  readonly resourceId?: string;
+  
+  /** Schema version from the .bprint file (customer-controlled) */
+  readonly schemaVersion?: string;
+  
+  /** SHA-256 hash of schema content excluding the schemaVersion field.
+   *  Allows the server to detect content changes independently of version bumps. */
+  readonly schemaContentHash?: string;
 }
 
 /**

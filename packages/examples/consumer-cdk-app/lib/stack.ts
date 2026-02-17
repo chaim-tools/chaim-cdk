@@ -8,8 +8,8 @@ import * as path from 'path';
  * Example CDK stack demonstrating ChaimDynamoDBBinder usage.
  * 
  * Shows two patterns:
- * 1. Direct API credentials with BEST_EFFORT failure mode (development)
- * 2. Secrets Manager credentials with STRICT failure mode (production)
+ * 1. Direct API credentials with BEST_EFFORT failure mode (development - explicitly opted in)
+ * 2. Secrets Manager credentials with default STRICT failure mode (production)
  */
 export class ConsumerStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -25,13 +25,14 @@ export class ConsumerStack extends cdk.Stack {
     });
 
     // Example 1: Using direct API credentials (for development/testing)
-    // failureMode defaults to BEST_EFFORT - deployment continues even if ingestion fails
+    // Explicitly opting into BEST_EFFORT - deployment continues even if ingestion fails
     const usersConfig = new TableBindingConfig(
       'my-app',
       ChaimCredentials.fromApiKeys(
         process.env.CHAIM_API_KEY || 'demo-api-key',
         process.env.CHAIM_API_SECRET || 'demo-api-secret'
-      )
+      ),
+      FailureMode.BEST_EFFORT
     );
     
     new ChaimDynamoDBBinder(this, 'UsersBinding', {
@@ -49,12 +50,11 @@ export class ConsumerStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Example 2: Using Secrets Manager with STRICT failure mode (for production)
-    // STRICT mode rolls back the deployment if ingestion fails
+    // Example 2: Using Secrets Manager with default STRICT failure mode (for production)
+    // STRICT is the default - deployment rolls back if ingestion fails
     const ordersConfig = new TableBindingConfig(
       'my-app',
-      ChaimCredentials.fromSecretsManager('chaim/api-credentials'),
-      FailureMode.STRICT
+      ChaimCredentials.fromSecretsManager('chaim/api-credentials')
     );
     
     new ChaimDynamoDBBinder(this, 'OrdersBinding', {

@@ -16,13 +16,15 @@ import { ChaimCredentials } from '../../src/types/credentials';
 import { TableBindingConfig } from '../../src/types/table-binding-config';
 import { FailureMode } from '../../src/types/failure-mode';
 
-// Mock schema data for testing
+// Mock schema data for testing — includes pk, sk so field validation passes
 const mockSchemaData = {
-  schemaVersion: '1.0.0',
+  schemaVersion: '1.0',
   entityName: 'User',
   description: 'Test user schema',
-  primaryKey: { partitionKey: 'userId' },
+  primaryKey: { partitionKey: 'pk' },
   fields: [
+    { name: 'pk', type: 'string', required: true },
+    { name: 'sk', type: 'string', required: false },
     { name: 'userId', type: 'string', required: true },
     { name: 'email', type: 'string', required: true },
   ],
@@ -168,7 +170,7 @@ describe('CDK Synthesis Tests', () => {
       });
     });
 
-    it('should use BEST_EFFORT as default failure mode', () => {
+    it('should use STRICT as default failure mode', () => {
       new ChaimDynamoDBBinder(stack, 'TestBinder', {
         schemaPath: './schemas/test.bprint',
         table,
@@ -180,7 +182,7 @@ describe('CDK Synthesis Tests', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
         Environment: {
           Variables: {
-            FAILURE_MODE: 'BEST_EFFORT',
+            FAILURE_MODE: 'STRICT',
           },
         },
       });
@@ -388,7 +390,7 @@ describe('CDK Synthesis Tests', () => {
       
       const table2 = new dynamodb.Table(stack, 'OrdersTable', {
         tableName: 'orders-table',
-        partitionKey: { name: 'orderId', type: dynamodb.AttributeType.STRING },
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       });
 
       new ChaimDynamoDBBinder(stack, 'UserBinder', {

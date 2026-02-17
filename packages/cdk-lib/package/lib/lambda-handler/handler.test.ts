@@ -310,14 +310,11 @@ describe('Lambda Handler', () => {
   });
 
   describe('Failure mode behavior', () => {
-    it('should default to BEST_EFFORT when FAILURE_MODE is not set', async () => {
+    it('should default to STRICT when FAILURE_MODE is not set', async () => {
       delete process.env.FAILURE_MODE;
       
-      // This should NOT throw even if the API call fails
-      const result = await handler({ RequestType: 'Create' }, {});
-
-      expect(result).toBeDefined();
-      expect(result.Data.IngestStatus).toBeDefined();
+      // STRICT mode should throw on API errors
+      await expect(handler({ RequestType: 'Create' }, {})).rejects.toThrow();
     });
 
     it('should include error message in FAILED response', async () => {
