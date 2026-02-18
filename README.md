@@ -268,10 +268,10 @@ cdk deploy                                                          # Production
 
 ```bash
 npm install
-npm run build          # Build all packages
-npm run test           # Run all tests
-npm run test:packages  # Unit tests only
-npm run clean          # Remove build artifacts
+npm run build         
+npm run test          
+npm run test:packages  
+npm run clean          
 ```
 
 ### Publishing
