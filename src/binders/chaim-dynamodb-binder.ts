@@ -224,9 +224,28 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
 
   /**
    * Extract Global Secondary Index metadata.
+   *
+   * CDK's L2 Table stores GSIs in an internal array and sets
+   * cfnTable.globalSecondaryIndexes to a Lazy/IResolvable token rather than
+   * a plain array until CloudFormation template synthesis occurs. Because
+   * extractMetadata() runs during construct instantiation (before synthesis),
+   * we must force-resolve the token via Stack.resolve() so that Array.isArray()
+   * receives the actual array instead of the token object.
    */
   private extractGSIs(cfnTable: dynamodb.CfnTable): GSIMetadata[] | undefined {
-    const gsis = cfnTable.globalSecondaryIndexes;
+    const stack = cdk.Stack.of(this);
+    let gsis: any = cfnTable.globalSecondaryIndexes;
+
+    // Resolve lazy/token values that CDK sets before synthesis
+    if (gsis && !Array.isArray(gsis) && cdk.Token.isUnresolved(gsis)) {
+      try {
+        gsis = stack.resolve(gsis);
+      } catch {
+        // Resolution may fail for cross-stack references; fall through to undefined
+        return undefined;
+      }
+    }
+
     if (!gsis || !Array.isArray(gsis) || gsis.length === 0) {
       return undefined;
     }
@@ -256,9 +275,23 @@ export class ChaimDynamoDBBinder extends BaseChaimBinder {
 
   /**
    * Extract Local Secondary Index metadata.
+   *
+   * Same lazy-resolution handling as extractGSIs() — see that method's
+   * comment for the full explanation.
    */
   private extractLSIs(cfnTable: dynamodb.CfnTable): LSIMetadata[] | undefined {
-    const lsis = cfnTable.localSecondaryIndexes;
+    const stack = cdk.Stack.of(this);
+    let lsis: any = cfnTable.localSecondaryIndexes;
+
+    // Resolve lazy/token values that CDK sets before synthesis
+    if (lsis && !Array.isArray(lsis) && cdk.Token.isUnresolved(lsis)) {
+      try {
+        lsis = stack.resolve(lsis);
+      } catch {
+        return undefined;
+      }
+    }
+
     if (!lsis || !Array.isArray(lsis) || lsis.length === 0) {
       return undefined;
     }
